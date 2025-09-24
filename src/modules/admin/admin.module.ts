@@ -2,8 +2,8 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { JwtModule } from '@nestjs/jwt';
 import { ConfigModule, ConfigService } from '@nestjs/config';
-import { AdminService } from './admin.service';
 import { AdminController } from './admin.controller';
+import { AdminService } from './admin.service';
 import { Admin } from './entities/admin.entity';
 import { AdminGuard } from './guards/admin/admin.guard';
 
@@ -21,6 +21,6 @@ import { AdminGuard } from './guards/admin/admin.guard';
   ],
   controllers: [AdminController],
   providers: [AdminService, AdminGuard],
-  exports: [AdminService],
+  exports: [AdminService, AdminGuard, JwtModule], // Export these so other modules can use them
 })
 export class AdminModule {}
