@@ -12,18 +12,19 @@ import {
     HttpCode,
     HttpStatus,
   } from '@nestjs/common';
-  import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
+  import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiQuery, ApiSecurity } from '@nestjs/swagger';
   import { UserService } from './user.service';
   import { FindAllUsersDto } from './dto/find-all-users.dto';
   import { AdminGuard } from '../admin/guards/admin/admin.guard';
   
   @ApiTags('Users')
-  @ApiBearerAuth('JWT-auth') // This indicates authentication is required
+  @ApiSecurity('JWT-auth') // Use ApiSecurity instead of ApiBearerAuth
   @Controller('user')
   export class UserController {
     constructor(private readonly userService: UserService) {}
   
-    @UseGuards(AdminGuard) // Lock this endpoint
+    @UseGuards(AdminGuard)
+    @ApiSecurity('JWT-auth') // Explicit security for this endpoint
     @Get()
     @ApiOperation({ summary: 'Get all users (admin only)' })
     @ApiQuery({ name: 'page', required: false, example: 1 })
@@ -36,7 +37,8 @@ import {
       return this.userService.findAll(query);
     }
   
-    @UseGuards(AdminGuard) // Lock this endpoint
+    @UseGuards(AdminGuard)
+    @ApiSecurity('JWT-auth')
     @Get('analytics/overview')
     @ApiOperation({ summary: 'Users overview analytics (sign-ups / active / churn)' })
     @ApiQuery({ name: 'period', required: false, enum: ['daily', 'weekly', 'monthly'], example: 'daily' })
@@ -44,21 +46,24 @@ import {
       return this.userService.getUsersOverview({ period });
     }
   
-    @UseGuards(AdminGuard) // Lock this endpoint
+    @UseGuards(AdminGuard)
+    @ApiSecurity('JWT-auth')
     @Get('analytics/demography')
     @ApiOperation({ summary: 'Users demography analytics (age / gender / country)' })
     async getUsersDemography() {
       return this.userService.getUsersDemography();
     }
   
-    @UseGuards(AdminGuard) // Lock this endpoint
+    @UseGuards(AdminGuard)
+    @ApiSecurity('JWT-auth')
     @Get('analytics/verification')
     @ApiOperation({ summary: 'Email vs Phone verification funnel' })
     async getVerificationFunnel() {
       return this.userService.getVerificationFunnel();
     }
   
-    @UseGuards(AdminGuard) // Lock this endpoint
+    @UseGuards(AdminGuard)
+    @ApiSecurity('JWT-auth')
     @Get('analytics/total')
     @ApiOperation({ summary: 'Total number of user accounts' })
     async getTotalUsers() {
@@ -66,14 +71,16 @@ import {
       return { total };
     }
   
-    @UseGuards(AdminGuard) // Lock this endpoint
+    @UseGuards(AdminGuard)
+    @ApiSecurity('JWT-auth')
     @Get(':id')
     @ApiOperation({ summary: 'Get user by ID (admin only)' })
     async findOne(@Param('id') id: string) {
       return this.userService.findOne(id, true);
     }
   
-    @UseGuards(AdminGuard) // Lock this endpoint
+    @UseGuards(AdminGuard)
+    @ApiSecurity('JWT-auth')
     @Delete(':id')
     @HttpCode(HttpStatus.OK)
     @ApiOperation({ summary: 'Delete user (admin only)' })

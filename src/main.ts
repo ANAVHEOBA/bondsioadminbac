@@ -1,3 +1,4 @@
+// Update src/main.ts
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
@@ -21,16 +22,46 @@ async function bootstrap() {
     credentials: true,
   });
 
-  // Swagger documentation
+  // Swagger documentation with better auth config
   const config = new DocumentBuilder()
     .setTitle('BondsIO Admin API')
     .setDescription('Admin panel API for BondsIO')
     .setVersion('1.0')
-    .addBearerAuth()
+    .addBearerAuth(
+      {
+        type: 'http',
+        scheme: 'bearer',
+        bearerFormat: 'JWT',
+        name: 'Authorization',
+        description: 'Enter JWT token',
+        in: 'header',
+      },
+      'JWT-auth',
+    )
     .build();
   
   const document = SwaggerModule.createDocument(app, config);
-  SwaggerModule.setup('api/docs', app, document);
+  
+  // Custom Swagger options
+  const swaggerOptions = {
+    swaggerOptions: {
+      persistAuthorization: true, // This helps persist auth between refreshes
+      authAction: {
+        JWTAuth: {
+          name: 'JWTAuth',
+          schema: {
+            type: 'http',
+            in: 'header',
+            name: 'Authorization',
+            description: 'Enter JWT token',
+          },
+          value: 'Bearer <JWT token>',
+        },
+      },
+    },
+  };
+  
+  SwaggerModule.setup('api/docs', app, document, swaggerOptions);
 
   const port = process.env.PORT || 3001;
   await app.listen(port);

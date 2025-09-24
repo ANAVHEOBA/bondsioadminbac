@@ -1,33 +1,30 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { ConfigModule } from '@nestjs/config';
-import { AppController } from './app.controller';
-import { AppService } from './app.service';
+import { ConfigModule, ConfigService } from '@nestjs/config';
 import { AdminModule } from './modules/admin/admin.module';
 import { UserModule } from './modules/user/user.module';
+import { ActivityModule } from './modules/activity/activity.module';
 
 @Module({
   imports: [
-    ConfigModule.forRoot({
-      isGlobal: true,
-    }),
+    ConfigModule.forRoot({ isGlobal: true }),
     TypeOrmModule.forRootAsync({
-      useFactory: () => ({
+      inject: [ConfigService],
+      useFactory: (cs: ConfigService) => ({
         type: 'mysql',
-        host: process.env.DB_HOST || 'tramway.proxy.rlwy.net',
-        port: parseInt(process.env.DB_PORT || '18418'),
-        username: process.env.DB_USERNAME || 'root',
-        password: process.env.DB_PASSWORD || 'xAcfRGcygedclogQmKgQdSyDteaeRPgc',
-        database: process.env.DB_DATABASE || 'railway',
+        host: cs.get<string>('DB_HOST'),
+        port: cs.get<number>('DB_PORT'),
+        username: cs.get<string>('DB_USERNAME'),
+        password: cs.get<string>('DB_PASSWORD'),
+        database: cs.get<string>('DB_DATABASE'),
         entities: [__dirname + '/**/*.entity{.ts,.js}'],
-        synchronize: true,
-        logging: process.env.NODE_ENV !== 'production',
+        synchronize: false,
+        logging: false,
       }),
     }),
     AdminModule,
     UserModule,
+    ActivityModule, // <-- added
   ],
-  controllers: [AppController],
-  providers: [AppService],
 })
 export class AppModule {}

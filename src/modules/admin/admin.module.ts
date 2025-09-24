@@ -21,6 +21,6 @@ import { AdminGuard } from './guards/admin/admin.guard';
   ],
   controllers: [AdminController],
   providers: [AdminService, AdminGuard],
-  exports: [AdminService, AdminGuard, JwtModule], // Export these so other modules can use them
+  exports: [AdminService, AdminGuard, JwtModule], // Export these
 })
 export class AdminModule {}

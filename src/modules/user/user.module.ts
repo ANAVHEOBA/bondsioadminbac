@@ -4,12 +4,12 @@ import { UserController } from './user.controller';
 import { UserService } from './user.service';
 import { User } from './entities/user.entity';
 import { Country } from './entities/country.entity';
-import { AdminModule } from '../admin/admin.module'; // Import AdminModule
+import { AdminModule } from '../admin/admin.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([User, Country]),
-    AdminModule, // Import AdminModule to get access to AdminGuard and JwtService
+    AdminModule, // Import AdminModule to get JwtService and AdminGuard
   ],
   controllers: [UserController],
   providers: [UserService],
