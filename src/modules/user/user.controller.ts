@@ -18,12 +18,12 @@ import {
   import { AdminGuard } from '../admin/guards/admin/admin.guard';
   
   @ApiTags('Users')
-  @ApiBearerAuth('JWT-auth')
+  @ApiBearerAuth('JWT-auth') // This indicates authentication is required
   @Controller('user')
   export class UserController {
     constructor(private readonly userService: UserService) {}
   
-    @UseGuards(AdminGuard)
+    @UseGuards(AdminGuard) // Lock this endpoint
     @Get()
     @ApiOperation({ summary: 'Get all users (admin only)' })
     @ApiQuery({ name: 'page', required: false, example: 1 })
@@ -36,7 +36,7 @@ import {
       return this.userService.findAll(query);
     }
   
-    @UseGuards(AdminGuard)
+    @UseGuards(AdminGuard) // Lock this endpoint
     @Get('analytics/overview')
     @ApiOperation({ summary: 'Users overview analytics (sign-ups / active / churn)' })
     @ApiQuery({ name: 'period', required: false, enum: ['daily', 'weekly', 'monthly'], example: 'daily' })
@@ -44,21 +44,21 @@ import {
       return this.userService.getUsersOverview({ period });
     }
   
-    @UseGuards(AdminGuard)
+    @UseGuards(AdminGuard) // Lock this endpoint
     @Get('analytics/demography')
     @ApiOperation({ summary: 'Users demography analytics (age / gender / country)' })
     async getUsersDemography() {
       return this.userService.getUsersDemography();
     }
   
-    @UseGuards(AdminGuard)
+    @UseGuards(AdminGuard) // Lock this endpoint
     @Get('analytics/verification')
     @ApiOperation({ summary: 'Email vs Phone verification funnel' })
     async getVerificationFunnel() {
       return this.userService.getVerificationFunnel();
     }
   
-    @UseGuards(AdminGuard)
+    @UseGuards(AdminGuard) // Lock this endpoint
     @Get('analytics/total')
     @ApiOperation({ summary: 'Total number of user accounts' })
     async getTotalUsers() {
@@ -66,14 +66,14 @@ import {
       return { total };
     }
   
-    @UseGuards(AdminGuard)
+    @UseGuards(AdminGuard) // Lock this endpoint
     @Get(':id')
     @ApiOperation({ summary: 'Get user by ID (admin only)' })
     async findOne(@Param('id') id: string) {
       return this.userService.findOne(id, true);
     }
   
-    @UseGuards(AdminGuard)
+    @UseGuards(AdminGuard) // Lock this endpoint
     @Delete(':id')
     @HttpCode(HttpStatus.OK)
     @ApiOperation({ summary: 'Delete user (admin only)' })
