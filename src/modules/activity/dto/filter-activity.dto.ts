@@ -1,94 +1,73 @@
-import { IsOptional, IsString, IsBoolean, IsNumber, IsArray } from 'class-validator';
-import { Transform } from 'class-transformer';
-import { ApiPropertyOptional } from '@nestjs/swagger';
+import { IsOptional, IsBoolean, IsString, IsArray, IsDateString, IsNumber, Min, Max, IsNumberString } from 'class-validator'
+import { Transform, Type } from 'class-transformer'
+import { ApiProperty } from '@nestjs/swagger'
 
 export class FilterActivityDto {
-  @ApiPropertyOptional()
+  @ApiProperty({ required: false, description: 'Filter by activity title' })
   @IsOptional()
   @IsString()
-  title?: string;
+  title?: string
 
-  @ApiPropertyOptional()
+  @ApiProperty({ required: false, description: 'Filter by location' })
   @IsOptional()
   @IsString()
-  location?: string;
+  location?: string
 
-  @ApiPropertyOptional()
+  @ApiProperty({ required: false, description: 'Filter by start date' })
   @IsOptional()
-  @IsString()
-  query?: string;
+  @IsDateString()
+  start_date?: Date
 
-  @ApiPropertyOptional()
+  @ApiProperty({ required: false, description: 'Filter by end date' })
+  @IsOptional()
+  @IsDateString()
+  end_date?: Date
+
+  @ApiProperty({ required: false, description: 'Filter by public/private status' })
   @IsOptional()
   @IsBoolean()
   @Transform(({ value }) => value === 'true')
-  is_public?: boolean;
+  is_public?: boolean
 
-  @ApiPropertyOptional()
+  @ApiProperty({ required: false, description: 'Get trending activities (most participants)' })
   @IsOptional()
   @IsBoolean()
   @Transform(({ value }) => value === 'true')
-  trending?: boolean;
+  trending?: boolean
 
-  @ApiPropertyOptional()
+  @ApiProperty({ required: false, description: 'Get currently happening activities' })
   @IsOptional()
   @IsBoolean()
   @Transform(({ value }) => value === 'true')
-  happening_now?: boolean;
+  happening_now?: boolean
 
-  @ApiPropertyOptional()
+  @ApiProperty({ 
+    required: false, 
+    description: 'Filter by interest categories (comma-separated IDs)',
+    example: '1,2,3',
+    type: String // ✅ plain string
+  })
   @IsOptional()
   @IsString()
-  start_date?: string;
+  interest_ids?: string
 
-  @ApiPropertyOptional()
+  @ApiProperty({ required: false, description: 'Search query across title and description' })
   @IsOptional()
   @IsString()
-  end_date?: string;
+  query?: string
 
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsString()
-  interest_ids?: string;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsString()
-  creator?: string;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsBoolean()
-  @Transform(({ value }) => value === 'true')
-  is_organiser?: boolean;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsBoolean()
-  @Transform(({ value }) => value === 'true')
-  is_liked?: boolean;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsBoolean()
-  @Transform(({ value }) => value === 'true')
-  has_joined?: boolean;
-
-  @ApiPropertyOptional()
+  @ApiProperty({ required: false, description: 'Page number (starts from 1)', example: 1 })
   @IsOptional()
   @IsNumber()
-  @Transform(({ value }) => parseInt(value, 10))
-  total_participants_count?: number;
+  @Min(1)
+  @Type(() => Number)
+  page?: number
 
-  @ApiPropertyOptional()
+  @ApiProperty({ required: false, description: 'Number of items per page', example: 20 })
   @IsOptional()
   @IsNumber()
-  @Transform(({ value }) => parseInt(value, 10))
-  page?: number = 1;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsNumber()
-  @Transform(({ value }) => parseInt(value, 10))
-  limit?: number = 20;
+  @Min(1)
+  @Max(100)
+  @Type(() => Number)
+  limit?: number
 }

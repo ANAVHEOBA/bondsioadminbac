@@ -1,115 +1,80 @@
+// src/modules/activity/dto/activity-response.dto.ts
 import { Exclude, Expose, Type } from 'class-transformer';
-import { ApiProperty } from '@nestjs/swagger';
 
-class UserDto {
-  @ApiProperty()
-  id: string;
+@Exclude()
+export class CreatorDto {
+  @Expose() id: string;
+  @Expose() full_name?: string;
+  @Expose() user_name?: string;
+  @Expose() profile_image?: string;
+}
 
-  @ApiProperty()
-  full_name: string;
+@Exclude()
+export class UserDto {
+  @Expose() id: string;
+  @Expose() full_name?: string;
+  @Expose() user_name?: string;
+  @Expose() profile_image?: string;
+}
 
-  @ApiProperty()
-  user_name: string;
+@Exclude()
+export class BondDto {
+  @Expose() id: number;
+  @Expose() name: string;
+  @Expose() city: string;
+  @Expose() description: string;
+  @Expose() banner: string;
+  @Expose() member_count: number;
+  @Expose() likes_count: number;
+  @Expose() is_public: boolean;
+  @Expose() is_trending: boolean;
+}
 
-  @ApiProperty({ nullable: true })
-  profile_image?: string;
+@Exclude()
+export class InterestDto {
+  @Expose() id: string;
+  @Expose() interest: string;
+  @Expose() is_active: boolean;
+  @Expose() created_at: Date;
 }
 
 @Exclude()
 export class ActivityResponseDto {
-  @Expose()
-  @ApiProperty()
-  id: number;
+  /* copy every field you want to expose */
+  @Expose() id: number;
+  @Expose() title: string;
+  @Expose() description: string;
+  @Expose() location: string;
+  @Expose() latitude: string;
+  @Expose() longitude: string;
+  @Expose() start_date: Date;
+  @Expose() end_date: Date;
+  @Expose() max_participants: number;
+  @Expose() request_to_join: boolean;
+  @Expose() is_public: boolean;
+  @Expose() post_to_story: boolean;
+  @Expose() cover_image?: string;
+  @Expose() likes_count: number;
+  @Expose() creator_id?: string;
+  @Expose() visibility: string;
 
-  @Expose()
-  @ApiProperty()
-  title: string;
+  /* relations - only include if they have meaningful data */
+  @Expose() @Type(() => UserDto) co_organizers?: UserDto[];
+  @Expose() @Type(() => UserDto) participants?: UserDto[];
+  @Expose() @Type(() => InterestDto) interests: InterestDto[];
+  @Expose() @Type(() => BondDto) bonds?: BondDto[];
+  
+  // Direct field for total participants count
+  @Expose() total_participants_count?: number;
 
-  @Expose()
-  @ApiProperty({ nullable: true })
-  description?: string;
+  @Expose() @Type(() => UserDto) liked_by?: UserDto[];
+  @Expose() @Type(() => UserDto) invited_participants?: UserDto[];
 
-  @Expose()
-  @ApiProperty({ nullable: true })
-  location?: string;
+@Expose()
+@Type(() => CreatorDto)
+creator: CreatorDto;
 
-  @Expose()
-  @ApiProperty({ nullable: true })
-  latitude?: number;
-
-  @Expose()
-  @ApiProperty({ nullable: true })
-  longitude?: number;
-
-  @Expose()
-  @ApiProperty()
-  start_date: Date;
-
-  @Expose()
-  @ApiProperty()
-  end_date: Date;
-
-  @Expose()
-  @ApiProperty()
-  max_participants: number;
-
-  @Expose()
-  @ApiProperty()
-  request_to_join: boolean;
-
-  @Expose()
-  @ApiProperty()
-  is_public: boolean;
-
-  @Expose()
-  @ApiProperty()
-  visibility: string;
-
-  @Expose()
-  @ApiProperty()
-  post_to_story: boolean;
-
-  @Expose()
-  @ApiProperty({ nullable: true })
-  cover_image?: string;
-
-  @Expose()
-  @ApiProperty()
-  likes_count: number;
-
-  @Expose()
-  @ApiProperty()
-  created_at: Date;
-
-  @Expose()
-  @ApiProperty()
-  updated_at: Date;
-
-  @Expose()
-  @Type(() => UserDto)
-  creator: UserDto;
-
-  @Expose()
-  @Type(() => UserDto)
-  co_organizers?: UserDto[];
-
-  @Expose()
-  @Type(() => UserDto)
-  participants?: UserDto[];
-
-  @Expose()
-  @ApiProperty()
-  total_participants_count: number;
-
-  @Expose()
-  @ApiProperty()
-  is_liked: boolean;
-
-  @Expose()
-  @ApiProperty()
-  is_organiser: boolean;
-
-  @Expose()
-  @ApiProperty()
-  has_joined: boolean;
+  @Expose() is_organiser: boolean;
+  @Expose() is_liked: boolean;
+  @Expose() has_joined: boolean;
 }
