@@ -11,6 +11,19 @@ import { ReviewReportFormDto } from './dto/report-bond.dto';
 export class BondsAdminController {
   constructor(private readonly bondsService: BondsService) {}
 
+
+
+@Get('admin/all')
+@ApiOperation({ summary: 'Get every bond in the system (admin)' })
+@ApiQuery({ name: 'page', required: false, type: Number })
+@ApiQuery({ name: 'limit', required: false, type: Number })
+async getAllBondsAdmin(
+  @Query('page') page = 1,
+  @Query('limit') limit = 20,
+) {
+  return this.bondsService.getAllBondsAdmin(page, limit);
+}
+
   @Get('admin/reported-bonds')
   @ApiOperation({ summary: 'List all bonds that have reports (admin)' })
   @ApiQuery({ name: 'page', required: false, type: Number })

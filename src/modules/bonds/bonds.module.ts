@@ -9,10 +9,10 @@ import { BondReport } from './entities/bond-report.entity';
 import { User } from '../user/entities/user.entity';
 import { ZeptomailApiModule } from '../../third-party/zeptomail-api/zeptomail-api.module';
 import { AdminModule } from '../admin/admin.module'; // <-- add this
-
+import { UserInterest } from '../user-interests/entities/user-interest.entity';
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Bond, BondReport, User]),
+    TypeOrmModule.forFeature([Bond, BondReport, User, UserInterest]),
     CacheModule.register({ ttl: 300, max: 100 }),
     ZeptomailApiModule,
     AdminModule, // <-- and this
