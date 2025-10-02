@@ -28,6 +28,10 @@ import { Activity } from '../activity/entities/activity.entity';
 import { ReportBondDto, BondReportResponseDto } from './dto/report-bond.dto';
 import { BondReport, ReportReason, ReportStatus } from './entities/bond-report.entity';
 import { ZeptomailApiService } from '../../third-party/zeptomail-api/zeptomail-api.service';
+import { BondStatsDto } from './dto/bond-stats.dto';
+import { BondAnalyticsDto, BondLocationAnalyticsDto, BondEngagementMetricsDto, BondCreatorAnalyticsDto, BondInterestAnalyticsDto, BondGrowthMetricsDto } from './dto/bond-analytics.dto';
+import { AdvancedSearchBondDto, BondSearchResponseDto } from './dto/advanced-search-bond.dto';
+import { AdminListBondsDto, AdminListBondsResponseDto } from './dto/admin-list-bonds.dto';
 
 @Injectable()
 export class BondsService {
@@ -231,6 +235,34 @@ export class BondsService {
     return { bonds: raw, total };
   }
 
+  /* ------------------------------------------------------------------ */
+  /*  ADMIN – list bonds with full details (parity with activities)      */
+  /* ------------------------------------------------------------------ */
+  async getAllBondsDetailedAdmin(
+    page = 1,
+    limit = 20,
+  ): Promise<{ bonds: BondResponseDto[]; total: number }> {
+    const skip = (page - 1) * limit;
+
+    const [bonds, total] = await this.bondRepository
+      .createQueryBuilder('bond')
+      .leftJoinAndSelect('bond.creator', 'creator')
+      .leftJoinAndSelect('bond.userInterests', 'userInterests')
+      .orderBy('bond.created_at', 'DESC')
+      .skip(skip)
+      .take(limit)
+      .getManyAndCount();
+
+    const enriched = await this.enrichBondsWithUserData(bonds);
+    const recentMap = await this.loadRecentActivities(enriched.map((b) => b.id));
+
+    const transformed: BondResponseDto[] = enriched.map((b) =>
+      this.transformBondResponse(b, undefined, recentMap.get(b.id) ?? [], false),
+    );
+
+    return { bonds: transformed, total };
+  }
+
   async reviewBondReport(
     reportId: number,
     reviewerId: string | null,
@@ -283,6 +315,1009 @@ export class BondsService {
     ]);
 
     return { total_reports: total, pending_reports: pending, recent_reports: recent };
+  }
+
+  async getBondStats(): Promise<BondStatsDto> {
+    const cacheKey = 'bond:stats';
+    const cached = await this.cacheManager.get<BondStatsDto>(cacheKey);
+    if (cached) return cached;
+
+    // Get current date boundaries
+    const now = new Date();
+    const last24h = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+    const last7d = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const last30d = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+
+    // Execute all queries in parallel for better performance
+    const [
+      totalBonds,
+      hiddenBonds,
+      publicBonds,
+      privateBonds,
+      totalMembers,
+      bondsLast24h,
+      bondsLast7d,
+      bondsLast30d,
+      totalReports,
+      pendingReports,
+      trendingBonds,
+      totalLikes,
+      unlimitedMemberBonds,
+      requestToJoinBonds,
+    ] = await Promise.all([
+      // Total bonds count
+      this.bondRepository.count(),
+      
+      // Hidden bonds count (assuming hidden_at field exists, if not we'll use a different approach)
+      this.bondRepository.query(`
+        SELECT COUNT(*) as count 
+        FROM bonds 
+        WHERE JSON_EXTRACT(COALESCE(metadata, '{}'), '$.hidden_at') IS NOT NULL
+      `).then(result => parseInt(result[0]?.count || '0', 10)).catch(() => 0),
+      
+      // Public bonds count
+      this.bondRepository.count({ where: { is_public: true } }),
+      
+      // Private bonds count
+      this.bondRepository.count({ where: { is_public: false } }),
+      
+      // Total members across all bonds
+      this.bondRepository.query(`
+        SELECT COUNT(DISTINCT user_id) as count 
+        FROM bonds_users
+      `).then(result => parseInt(result[0]?.count || '0', 10)),
+      
+      // Bonds created in last 24 hours
+      this.bondRepository.count({ 
+        where: { 
+          created_at: MoreThanOrEqual(last24h) 
+        } 
+      }),
+      
+      // Bonds created in last 7 days
+      this.bondRepository.count({ 
+        where: { 
+          created_at: MoreThanOrEqual(last7d) 
+        } 
+      }),
+      
+      // Bonds created in last 30 days
+      this.bondRepository.count({ 
+        where: { 
+          created_at: MoreThanOrEqual(last30d) 
+        } 
+      }),
+      
+      // Total reports
+      this.bondReportRepository.count(),
+      
+      // Pending reports
+      this.bondReportRepository.count({ where: { status: ReportStatus.PENDING } }),
+      
+      // Trending bonds
+      this.bondRepository.count({ where: { is_trending: true } }),
+      
+      // Total likes across all bonds
+      this.bondRepository.query(`
+        SELECT COALESCE(SUM(likes_count), 0) as total_likes 
+        FROM bonds
+      `).then(result => parseInt(result[0]?.total_likes || '0', 10)),
+      
+      // Unlimited member bonds
+      this.bondRepository.count({ where: { is_unlimited_members: true } }),
+      
+      // Request to join bonds
+      this.bondRepository.count({ where: { request_to_join: true } }),
+    ]);
+
+    const activeBonds = totalBonds - hiddenBonds;
+    const averageMembersPerBond = totalBonds > 0 
+      ? Math.round((totalMembers / totalBonds) * 100) / 100 
+      : 0;
+    const averageLikesPerBond = totalBonds > 0 
+      ? Math.round((totalLikes / totalBonds) * 100) / 100 
+      : 0;
+
+    const stats: BondStatsDto = {
+      total_bonds: totalBonds,
+      active_bonds: activeBonds,
+      hidden_bonds: hiddenBonds,
+      public_bonds: publicBonds,
+      private_bonds: privateBonds,
+      total_members: totalMembers,
+      average_members_per_bond: averageMembersPerBond,
+      bonds_last_24h: bondsLast24h,
+      bonds_last_7d: bondsLast7d,
+      bonds_last_30d: bondsLast30d,
+      total_reports: totalReports,
+      pending_reports: pendingReports,
+      trending_bonds: trendingBonds,
+      total_likes: totalLikes,
+      average_likes_per_bond: averageLikesPerBond,
+      unlimited_member_bonds: unlimitedMemberBonds,
+      request_to_join_bonds: requestToJoinBonds,
+    };
+
+    // Cache for 5 minutes
+    await this.cacheManager.set(cacheKey, stats, 300);
+    return stats;
+  }
+
+  async getBondAnalytics(): Promise<BondAnalyticsDto> {
+    const cacheKey = 'bond:analytics';
+    const cached = await this.cacheManager.get<BondAnalyticsDto>(cacheKey);
+    if (cached) return cached;
+
+    // Execute all analytics queries in parallel
+    const [
+      popularLocations,
+      engagementMetrics,
+      topCreators,
+      popularInterests,
+      growthMetrics,
+      bondTrends,
+      memberTrends,
+    ] = await Promise.all([
+      this.getPopularBondLocations(),
+      this.getBondEngagementMetrics(),
+      this.getTopBondCreators(),
+      this.getPopularBondInterests(),
+      this.getBondGrowthMetrics(),
+      this.getBondTrends(),
+      this.getMemberTrends(),
+    ]);
+
+    const analytics: BondAnalyticsDto = {
+      popular_locations: popularLocations,
+      engagement_metrics: engagementMetrics,
+      top_creators: topCreators,
+      popular_interests: popularInterests,
+      growth_metrics: growthMetrics,
+      bond_trends: bondTrends,
+      member_trends: memberTrends,
+    };
+
+    // Cache for 10 minutes (analytics can be less frequent)
+    await this.cacheManager.set(cacheKey, analytics, 600);
+    return analytics;
+  }
+
+  private async getPopularBondLocations(): Promise<BondLocationAnalyticsDto[]> {
+    const result = await this.bondRepository.query(`
+      SELECT 
+        b.city,
+        COUNT(b.id) as bond_count,
+        COALESCE(SUM(member_counts.member_count), 0) as total_members,
+        COALESCE(AVG(member_counts.member_count), 0) as avg_members
+      FROM bonds b
+      LEFT JOIN (
+        SELECT 
+          bond_id, 
+          COUNT(user_id) as member_count
+        FROM bonds_users 
+        GROUP BY bond_id
+      ) member_counts ON b.id = member_counts.bond_id
+      WHERE b.city IS NOT NULL AND b.city != ''
+      GROUP BY b.city
+      HAVING COUNT(b.id) >= 1
+      ORDER BY bond_count DESC, total_members DESC
+      LIMIT 10
+    `);
+
+    return result.map((row: any) => ({
+      city: row.city,
+      bond_count: parseInt(row.bond_count, 10),
+      total_members: parseInt(row.total_members, 10),
+      avg_members: Math.round(parseFloat(row.avg_members) * 100) / 100,
+    }));
+  }
+
+  private async getBondEngagementMetrics(): Promise<BondEngagementMetricsDto> {
+    const [
+      avgLikes,
+      avgMembers,
+      activityRate,
+      avgViewCount,
+      popularVisibility,
+      reportRate,
+      requestToJoinRate,
+      unlimitedMembersRate,
+    ] = await Promise.all([
+      // Average likes per bond
+      this.bondRepository.query(`
+        SELECT AVG(likes_count) as avg_likes FROM bonds
+      `).then(result => parseFloat(result[0]?.avg_likes || '0')),
+
+      // Average members per bond
+      this.bondRepository.query(`
+        SELECT AVG(member_count) as avg_members
+        FROM (
+          SELECT COUNT(user_id) as member_count
+          FROM bonds_users 
+          GROUP BY bond_id
+        ) member_counts
+      `).then(result => parseFloat(result[0]?.avg_members || '0')),
+
+      // Activity rate (bonds with recent activities)
+      Promise.all([
+        this.bondRepository.query(`
+          SELECT COUNT(DISTINCT ab.bond_id) as active_bonds
+          FROM activity_bonds ab
+          JOIN activities a ON a.id = ab.activity_id
+          WHERE a.start_date >= NOW() - INTERVAL 30 DAY
+        `).then(result => parseInt(result[0]?.active_bonds || '0', 10)),
+        this.bondRepository.count(),
+      ]).then(([activeBonds, totalBonds]) => 
+        totalBonds > 0 ? (activeBonds / totalBonds) * 100 : 0
+      ),
+
+      // Average view count per bond
+      this.bondRepository.query(`
+        SELECT AVG(view_count) as avg_view_count FROM bonds
+      `).then(result => parseFloat(result[0]?.avg_view_count || '0')),
+
+      // Most popular visibility type
+      this.bondRepository.query(`
+        SELECT 
+          CASE WHEN is_public = 1 THEN 'public' ELSE 'private' END as visibility, 
+          COUNT(*) as count
+        FROM bonds
+        GROUP BY is_public
+        ORDER BY count DESC
+        LIMIT 1
+      `).then(result => result[0]?.visibility || 'public'),
+
+      // Report rate per 100 bonds
+      Promise.all([
+        this.bondReportRepository.count(),
+        this.bondRepository.count(),
+      ]).then(([reports, bonds]) => 
+        bonds > 0 ? (reports / bonds) * 100 : 0
+      ),
+
+      // Request to join rate
+      Promise.all([
+        this.bondRepository.count({ where: { request_to_join: true } }),
+        this.bondRepository.count(),
+      ]).then(([requestToJoin, total]) => 
+        total > 0 ? (requestToJoin / total) * 100 : 0
+      ),
+
+      // Unlimited members rate
+      Promise.all([
+        this.bondRepository.count({ where: { is_unlimited_members: true } }),
+        this.bondRepository.count(),
+      ]).then(([unlimited, total]) => 
+        total > 0 ? (unlimited / total) * 100 : 0
+      ),
+    ]);
+
+    return {
+      avg_likes_per_bond: Math.round(avgLikes * 100) / 100,
+      avg_members_per_bond: Math.round(avgMembers * 100) / 100,
+      activity_rate: Math.round(activityRate * 100) / 100,
+      avg_view_count: Math.round(avgViewCount * 100) / 100,
+      most_popular_visibility: popularVisibility,
+      report_rate: Math.round(reportRate * 100) / 100,
+      request_to_join_rate: Math.round(requestToJoinRate * 100) / 100,
+      unlimited_members_rate: Math.round(unlimitedMembersRate * 100) / 100,
+    };
+  }
+
+  private async getTopBondCreators(): Promise<BondCreatorAnalyticsDto[]> {
+    const result = await this.bondRepository.query(`
+      SELECT 
+        u.id as creator_id,
+        u.full_name as creator_name,
+        COUNT(b.id) as bond_count,
+        COALESCE(SUM(member_counts.member_count), 0) as total_members,
+        COALESCE(AVG(member_counts.member_count), 0) as avg_members,
+        COALESCE(SUM(b.likes_count), 0) as total_likes,
+        COALESCE(SUM(b.view_count), 0) as total_views
+      FROM users u
+      JOIN bonds b ON u.id = b.creator_id
+      LEFT JOIN (
+        SELECT 
+          bond_id, 
+          COUNT(user_id) as member_count
+        FROM bonds_users 
+        GROUP BY bond_id
+      ) member_counts ON b.id = member_counts.bond_id
+      GROUP BY u.id, u.full_name
+      HAVING COUNT(b.id) >= 1
+      ORDER BY bond_count DESC, total_members DESC
+      LIMIT 10
+    `);
+
+    return result.map((row: any) => ({
+      creator_id: row.creator_id,
+      creator_name: row.creator_name || 'Unknown',
+      bond_count: parseInt(row.bond_count, 10),
+      total_members: parseInt(row.total_members, 10),
+      avg_members: Math.round(parseFloat(row.avg_members) * 100) / 100,
+      total_likes: parseInt(row.total_likes, 10),
+      total_views: parseInt(row.total_views, 10),
+    }));
+  }
+
+  private async getPopularBondInterests(): Promise<BondInterestAnalyticsDto[]> {
+    const result = await this.bondRepository.query(`
+      SELECT 
+        ui.interest,
+        COUNT(DISTINCT bui.bond_id) as bond_count,
+        COALESCE(SUM(member_counts.member_count), 0) as total_members,
+        COALESCE(AVG(member_counts.member_count), 0) as avg_members
+      FROM user_interests ui
+      JOIN bonds_user_interests bui ON ui.id = bui.user_interest_id
+      LEFT JOIN (
+        SELECT 
+          bond_id, 
+          COUNT(user_id) as member_count
+        FROM bonds_users 
+        GROUP BY bond_id
+      ) member_counts ON bui.bond_id = member_counts.bond_id
+      WHERE ui.is_active = 1
+      GROUP BY ui.interest
+      HAVING COUNT(DISTINCT bui.bond_id) >= 1
+      ORDER BY bond_count DESC, total_members DESC
+      LIMIT 10
+    `);
+
+    return result.map((row: any) => ({
+      interest: row.interest,
+      bond_count: parseInt(row.bond_count, 10),
+      total_members: parseInt(row.total_members, 10),
+      avg_members: Math.round(parseFloat(row.avg_members) * 100) / 100,
+    }));
+  }
+
+  private async getBondGrowthMetrics(): Promise<BondGrowthMetricsDto> {
+    const now = new Date();
+    const last7d = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const last30d = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+
+    const [
+      newBonds7d,
+      newBonds30d,
+      newMembers7d,
+      newMembers30d,
+      avgMemberGrowthRate,
+    ] = await Promise.all([
+      // New bonds in last 7 days
+      this.bondRepository.count({ 
+        where: { created_at: MoreThanOrEqual(last7d) } 
+      }),
+
+      // New bonds in last 30 days
+      this.bondRepository.count({ 
+        where: { created_at: MoreThanOrEqual(last30d) } 
+      }),
+
+      // New members in last 7 days (approximate - would need join timestamps)
+      this.bondRepository.query(`
+        SELECT COUNT(DISTINCT bu.user_id) as new_members
+        FROM bonds_users bu
+        JOIN bonds b ON b.id = bu.bond_id
+        WHERE b.created_at >= ?
+      `, [last7d]).then(result => parseInt(result[0]?.new_members || '0', 10)),
+
+      // New members in last 30 days
+      this.bondRepository.query(`
+        SELECT COUNT(DISTINCT bu.user_id) as new_members
+        FROM bonds_users bu
+        JOIN bonds b ON b.id = bu.bond_id
+        WHERE b.created_at >= ?
+      `, [last30d]).then(result => parseInt(result[0]?.new_members || '0', 10)),
+
+      // Average member growth rate (simplified calculation)
+      this.bondRepository.query(`
+        SELECT AVG(member_count) as avg_growth
+        FROM bonds
+        WHERE member_count > 0
+      `).then(result => parseFloat(result[0]?.avg_growth || '0')),
+    ]);
+
+    return {
+      avg_member_growth_rate: Math.round(avgMemberGrowthRate * 100) / 100,
+      new_bonds_7d: newBonds7d,
+      new_bonds_30d: newBonds30d,
+      new_members_7d: newMembers7d,
+      new_members_30d: newMembers30d,
+    };
+  }
+
+  private async getBondTrends(): Promise<{ date: string; count: number }[]> {
+    const result = await this.bondRepository.query(`
+      SELECT 
+        DATE(created_at) as date,
+        COUNT(*) as count
+      FROM bonds
+      WHERE created_at >= NOW() - INTERVAL 30 DAY
+      GROUP BY DATE(created_at)
+      ORDER BY date DESC
+    `);
+
+    return result.map((row: any) => ({
+      date: row.date,
+      count: parseInt(row.count, 10),
+    }));
+  }
+
+  private async getMemberTrends(): Promise<{ date: string; count: number }[]> {
+    const result = await this.bondRepository.query(`
+      SELECT 
+        DATE(b.created_at) as date,
+        COUNT(DISTINCT bu.user_id) as count
+      FROM bonds_users bu
+      JOIN bonds b ON b.id = bu.bond_id
+      WHERE b.created_at >= NOW() - INTERVAL 30 DAY
+      GROUP BY DATE(b.created_at)
+      ORDER BY date DESC
+    `);
+
+    return result.map((row: any) => ({
+      date: row.date,
+      count: parseInt(row.count, 10),
+    }));
+  }
+
+  async advancedSearchBonds(searchDto: AdvancedSearchBondDto): Promise<BondSearchResponseDto> {
+    const {
+      q,
+      name,
+      city,
+      creator,
+      created_from,
+      created_to,
+      visibility,
+      min_members,
+      max_members,
+      min_likes,
+      max_likes,
+      min_views,
+      is_hidden,
+      is_trending,
+      has_reports,
+      is_unlimited_members,
+      request_to_join,
+      post_to_story,
+      interest_ids,
+      sort_by = 'created_at',
+      sort_order = 'DESC',
+      page = 1,
+      limit = 20,
+    } = searchDto;
+
+    const queryBuilder = this.bondRepository
+      .createQueryBuilder('bond')
+      .leftJoinAndSelect('bond.creator', 'creator')
+      .leftJoin('bonds_users', 'bu', 'bu.bond_id = bond.id')
+      .leftJoin('bonds_user_interests', 'bui', 'bui.bond_id = bond.id')
+      .leftJoin('user_interests', 'ui', 'ui.id = bui.user_interest_id')
+      .leftJoin('bond_reports', 'br', 'br.bond_id = bond.id')
+      .addSelect('COUNT(DISTINCT bu.user_id)', 'member_count')
+      .groupBy('bond.id')
+      .addGroupBy('creator.id');
+
+    const filtersApplied: string[] = [];
+
+    // Full-text search across name, description, and city
+    if (q) {
+      queryBuilder.andWhere(
+        '(bond.name LIKE :q OR bond.description LIKE :q OR bond.city LIKE :q)',
+        { q: `%${q}%` }
+      );
+      filtersApplied.push(`text_search: "${q}"`);
+    }
+
+    // Name filter
+    if (name) {
+      queryBuilder.andWhere('bond.name LIKE :name', { name: `%${name}%` });
+      filtersApplied.push(`name: "${name}"`);
+    }
+
+    // City filter
+    if (city) {
+      queryBuilder.andWhere('bond.city LIKE :city', { city: `%${city}%` });
+      filtersApplied.push(`city: "${city}"`);
+    }
+
+    // Creator filter
+    if (creator) {
+      queryBuilder.andWhere(
+        '(creator.full_name LIKE :creator OR creator.user_name LIKE :creator)',
+        { creator: `%${creator}%` }
+      );
+      filtersApplied.push(`creator: "${creator}"`);
+    }
+
+    // Date range filters
+    if (created_from) {
+      queryBuilder.andWhere('bond.created_at >= :created_from', { created_from });
+      filtersApplied.push(`created_from: ${created_from}`);
+    }
+
+    if (created_to) {
+      queryBuilder.andWhere('bond.created_at <= :created_to', { created_to });
+      filtersApplied.push(`created_to: ${created_to}`);
+    }
+
+    // Visibility filter
+    if (visibility !== undefined) {
+      const isPublic = visibility === 'public';
+      queryBuilder.andWhere('bond.is_public = :is_public', { is_public: isPublic });
+      filtersApplied.push(`visibility: ${visibility}`);
+    }
+
+    // Member count filters
+    if (min_members !== undefined) {
+      queryBuilder.having('COUNT(DISTINCT bu.user_id) >= :min_members', { min_members });
+      filtersApplied.push(`min_members: ${min_members}`);
+    }
+
+    if (max_members !== undefined) {
+      queryBuilder.having('COUNT(DISTINCT bu.user_id) <= :max_members', { max_members });
+      filtersApplied.push(`max_members: ${max_members}`);
+    }
+
+    // Likes filters
+    if (min_likes !== undefined) {
+      queryBuilder.andWhere('bond.likes_count >= :min_likes', { min_likes });
+      filtersApplied.push(`min_likes: ${min_likes}`);
+    }
+
+    if (max_likes !== undefined) {
+      queryBuilder.andWhere('bond.likes_count <= :max_likes', { max_likes });
+      filtersApplied.push(`max_likes: ${max_likes}`);
+    }
+
+    // View count filter
+    if (min_views !== undefined) {
+      queryBuilder.andWhere('bond.view_count >= :min_views', { min_views });
+      filtersApplied.push(`min_views: ${min_views}`);
+    }
+
+    // Hidden status filter
+    if (is_hidden !== undefined) {
+      if (is_hidden) {
+        queryBuilder.andWhere("JSON_EXTRACT(COALESCE(bond.metadata, '{}'), '$.hidden_at') IS NOT NULL");
+      } else {
+        queryBuilder.andWhere("JSON_EXTRACT(COALESCE(bond.metadata, '{}'), '$.hidden_at') IS NULL");
+      }
+      filtersApplied.push(`is_hidden: ${is_hidden}`);
+    }
+
+    // Trending status filter
+    if (is_trending !== undefined) {
+      queryBuilder.andWhere('bond.is_trending = :is_trending', { is_trending });
+      filtersApplied.push(`is_trending: ${is_trending}`);
+    }
+
+    // Reports filter
+    if (has_reports !== undefined) {
+      if (has_reports) {
+        queryBuilder.andWhere('br.id IS NOT NULL');
+      } else {
+        queryBuilder.andWhere('br.id IS NULL');
+      }
+      filtersApplied.push(`has_reports: ${has_reports}`);
+    }
+
+    // Configuration filters
+    if (is_unlimited_members !== undefined) {
+      queryBuilder.andWhere('bond.is_unlimited_members = :is_unlimited_members', { is_unlimited_members });
+      filtersApplied.push(`is_unlimited_members: ${is_unlimited_members}`);
+    }
+
+    if (request_to_join !== undefined) {
+      queryBuilder.andWhere('bond.request_to_join = :request_to_join', { request_to_join });
+      filtersApplied.push(`request_to_join: ${request_to_join}`);
+    }
+
+    if (post_to_story !== undefined) {
+      queryBuilder.andWhere('bond.post_to_story = :post_to_story', { post_to_story });
+      filtersApplied.push(`post_to_story: ${post_to_story}`);
+    }
+
+    // Interest filter
+    if (interest_ids) {
+      const interestIdArray = interest_ids.split(',').map(id => id.trim());
+      queryBuilder.andWhere('ui.id IN (:...interest_ids)', { interest_ids: interestIdArray });
+      filtersApplied.push(`interest_ids: ${interest_ids}`);
+    }
+
+    // Sorting
+    let sortField = 'bond.created_at';
+    switch (sort_by) {
+      case 'updated_at':
+        sortField = 'bond.updated_at';
+        break;
+      case 'name':
+        sortField = 'bond.name';
+        break;
+      case 'city':
+        sortField = 'bond.city';
+        break;
+      case 'member_count':
+        sortField = 'member_count';
+        break;
+      case 'likes_count':
+        sortField = 'bond.likes_count';
+        break;
+      case 'view_count':
+        sortField = 'bond.view_count';
+        break;
+      default:
+        sortField = 'bond.created_at';
+    }
+
+    queryBuilder.orderBy(sortField, sort_order as 'ASC' | 'DESC');
+
+    // Get total count for pagination
+    const totalQuery = queryBuilder.clone();
+    const totalResult = await totalQuery.getRawMany();
+    const total = totalResult.length;
+
+    // Apply pagination
+    const skip = (page - 1) * limit;
+    queryBuilder.offset(skip).limit(limit);
+
+    // Execute search query
+    const rawResults = await queryBuilder.getRawAndEntities();
+    const bonds = rawResults.entities;
+
+    // Enrich bonds with member count and other data
+    const enrichedBonds = await Promise.all(
+      bonds.map(async (bond, index) => {
+        const memberCount = parseInt(rawResults.raw[index]?.member_count || '0', 10);
+        
+        // Get last few members
+        const lastMembers = await this.bondRepository.query(`
+          SELECT 
+            bu.bond_id as bondId,
+            bu.user_id as userId,
+            u.full_name as fullName,
+            u.user_name as userName,
+            u.profile_image as profileImage
+          FROM bonds_users bu
+          JOIN users u ON u.id = bu.user_id
+          WHERE bu.bond_id = ?
+          ORDER BY bu.user_id DESC
+          LIMIT 5
+        `, [bond.id]);
+
+        // Get interests
+        const interests = await this.bondRepository.query(`
+          SELECT ui.id, ui.interest, ui.is_active, ui.created_at
+          FROM user_interests ui
+          JOIN bonds_user_interests bui ON ui.id = bui.user_interest_id
+          WHERE bui.bond_id = ? AND ui.is_active = 1
+        `, [bond.id]);
+
+        return {
+          ...bond,
+          member_count: memberCount,
+          lastMembers,
+          userInterests: interests,
+          hasJoined: false, // Admin context
+          isCoOrganizer: false, // Admin context
+        };
+      })
+    );
+
+    const totalPages = Math.ceil(total / limit);
+
+    return {
+      bonds: enrichedBonds,
+      total,
+      page,
+      limit,
+      total_pages: totalPages,
+      search_info: {
+        query: q,
+        filters_applied: filtersApplied,
+        sort_by,
+        sort_order,
+      },
+    };
+  }
+
+  async getAdminBondsList(listDto: AdminListBondsDto): Promise<AdminListBondsResponseDto> {
+    const {
+      q,
+      name,
+      city,
+      creator,
+      visibility,
+      is_trending,
+      is_hidden,
+      has_reports,
+      is_unlimited_members,
+      request_to_join,
+      min_members,
+      max_members,
+      sort_by = 'created_at',
+      sort_order = 'DESC',
+      page = 1,
+      limit = 20,
+    } = listDto;
+
+    const queryBuilder = this.bondRepository
+      .createQueryBuilder('bond')
+      .leftJoinAndSelect('bond.creator', 'creator')
+      .leftJoinAndSelect('bond.userInterests', 'userInterests')
+      .leftJoin('bonds_users', 'bu', 'bu.bond_id = bond.id')
+      .leftJoin('bond_reports', 'br', 'br.bond_id = bond.id')
+      .addSelect('COUNT(DISTINCT bu.user_id)', 'member_count')
+      .groupBy('bond.id')
+      .addGroupBy('creator.id')
+      .addGroupBy('userInterests.id');
+
+    const filtersApplied: string[] = [];
+
+    // Full-text search
+    if (q) {
+      queryBuilder.andWhere(
+        '(bond.name LIKE :q OR bond.description LIKE :q OR bond.city LIKE :q)',
+        { q: `%${q}%` }
+      );
+      filtersApplied.push(`search: "${q}"`);
+    }
+
+    // Individual filters
+    if (name) {
+      queryBuilder.andWhere('bond.name LIKE :name', { name: `%${name}%` });
+      filtersApplied.push(`name: "${name}"`);
+    }
+
+    if (city) {
+      queryBuilder.andWhere('bond.city LIKE :city', { city: `%${city}%` });
+      filtersApplied.push(`city: "${city}"`);
+    }
+
+    if (creator) {
+      queryBuilder.andWhere(
+        '(creator.full_name LIKE :creator OR creator.user_name LIKE :creator)',
+        { creator: `%${creator}%` }
+      );
+      filtersApplied.push(`creator: "${creator}"`);
+    }
+
+    if (visibility !== undefined) {
+      const isPublic = visibility === 'public';
+      queryBuilder.andWhere('bond.is_public = :is_public', { is_public: isPublic });
+      filtersApplied.push(`visibility: ${visibility}`);
+    }
+
+    if (is_trending !== undefined) {
+      queryBuilder.andWhere('bond.is_trending = :is_trending', { is_trending });
+      filtersApplied.push(`is_trending: ${is_trending}`);
+    }
+
+    if (is_hidden !== undefined) {
+      if (is_hidden) {
+        queryBuilder.andWhere("JSON_EXTRACT(COALESCE(bond.metadata, '{}'), '$.hidden_at') IS NOT NULL");
+      } else {
+        queryBuilder.andWhere("JSON_EXTRACT(COALESCE(bond.metadata, '{}'), '$.hidden_at') IS NULL");
+      }
+      filtersApplied.push(`is_hidden: ${is_hidden}`);
+    }
+
+    if (has_reports !== undefined) {
+      if (has_reports) {
+        queryBuilder.andWhere('br.id IS NOT NULL');
+      } else {
+        queryBuilder.andWhere('br.id IS NULL');
+      }
+      filtersApplied.push(`has_reports: ${has_reports}`);
+    }
+
+    if (is_unlimited_members !== undefined) {
+      queryBuilder.andWhere('bond.is_unlimited_members = :is_unlimited_members', { is_unlimited_members });
+      filtersApplied.push(`is_unlimited_members: ${is_unlimited_members}`);
+    }
+
+    if (request_to_join !== undefined) {
+      queryBuilder.andWhere('bond.request_to_join = :request_to_join', { request_to_join });
+      filtersApplied.push(`request_to_join: ${request_to_join}`);
+    }
+
+    // Member count filters
+    if (min_members !== undefined) {
+      queryBuilder.having('COUNT(DISTINCT bu.user_id) >= :min_members', { min_members });
+      filtersApplied.push(`min_members: ${min_members}`);
+    }
+
+    if (max_members !== undefined) {
+      queryBuilder.having('COUNT(DISTINCT bu.user_id) <= :max_members', { max_members });
+      filtersApplied.push(`max_members: ${max_members}`);
+    }
+
+    // Sorting
+    let sortField = 'bond.created_at';
+    switch (sort_by) {
+      case 'updated_at':
+        sortField = 'bond.updated_at';
+        break;
+      case 'name':
+        sortField = 'bond.name';
+        break;
+      case 'city':
+        sortField = 'bond.city';
+        break;
+      case 'member_count':
+        sortField = 'member_count';
+        break;
+      case 'likes_count':
+        sortField = 'bond.likes_count';
+        break;
+      case 'view_count':
+        sortField = 'bond.view_count';
+        break;
+      default:
+        sortField = 'bond.created_at';
+    }
+
+    queryBuilder.orderBy(sortField, sort_order as 'ASC' | 'DESC');
+
+    // Get total count
+    const totalQuery = queryBuilder.clone();
+    const totalResult = await totalQuery.getRawMany();
+    const total = totalResult.length;
+
+    // Apply pagination
+    const skip = (page - 1) * limit;
+    queryBuilder.offset(skip).limit(limit);
+
+    // Execute query
+    const rawResults = await queryBuilder.getRawAndEntities();
+    const bonds = rawResults.entities;
+
+    // Enrich bonds with additional data
+    const enrichedBonds = await Promise.all(
+      bonds.map(async (bond, index) => {
+        const memberCount = parseInt(rawResults.raw[index]?.member_count || '0', 10);
+        
+        // Get last few members
+        const lastMembers = await this.bondRepository.query(`
+          SELECT 
+            bu.bond_id as bondId,
+            bu.user_id as userId,
+            u.full_name as fullName,
+            u.user_name as userName,
+            u.profile_image as profileImage
+          FROM bonds_users bu
+          JOIN users u ON u.id = bu.user_id
+          WHERE bu.bond_id = ?
+          ORDER BY bu.user_id DESC
+          LIMIT 5
+        `, [bond.id]);
+
+        // Get recent activities
+        const recentActivities = await this.bondRepository.query(`
+          SELECT 
+            a.id, a.title, a.description, a.cover_image,
+            a.start_date, a.end_date, a.location
+          FROM activities a
+          JOIN activity_bonds ab ON a.id = ab.activity_id
+          WHERE ab.bond_id = ?
+          ORDER BY a.start_date DESC
+          LIMIT 3
+        `, [bond.id]);
+
+        return {
+          ...bond,
+          member_count: memberCount,
+          lastMembers,
+          recentActivities,
+          hasJoined: false, // Admin context
+          isCoOrganizer: false, // Admin context
+        };
+      })
+    );
+
+    const totalPages = Math.ceil(total / limit);
+
+    return {
+      bonds: enrichedBonds,
+      total,
+      page,
+      limit,
+      total_pages: totalPages,
+      filters_info: {
+        applied_filters: filtersApplied,
+        sort_by,
+        sort_order,
+      },
+    };
+  }
+
+  async getTrendingBonds(page = 1, limit = 20): Promise<AdminListBondsResponseDto> {
+    const queryBuilder = this.bondRepository
+      .createQueryBuilder('bond')
+      .leftJoinAndSelect('bond.creator', 'creator')
+      .leftJoinAndSelect('bond.userInterests', 'userInterests')
+      .leftJoin('bonds_users', 'bu', 'bu.bond_id = bond.id')
+      .addSelect('COUNT(DISTINCT bu.user_id)', 'member_count')
+      .where('bond.is_trending = :is_trending', { is_trending: true })
+      .andWhere("JSON_EXTRACT(COALESCE(bond.metadata, '{}'), '$.hidden_at') IS NULL") // Exclude hidden
+      .groupBy('bond.id')
+      .addGroupBy('creator.id')
+      .addGroupBy('userInterests.id')
+      .orderBy('bond.likes_count', 'DESC')
+      .addOrderBy('member_count', 'DESC')
+      .addOrderBy('bond.view_count', 'DESC');
+
+    // Get total count
+    const totalQuery = queryBuilder.clone();
+    const totalResult = await totalQuery.getRawMany();
+    const total = totalResult.length;
+
+    // Apply pagination
+    const skip = (page - 1) * limit;
+    queryBuilder.offset(skip).limit(limit);
+
+    // Execute query
+    const rawResults = await queryBuilder.getRawAndEntities();
+    const bonds = rawResults.entities;
+
+    // Enrich bonds with additional data
+    const enrichedBonds = await Promise.all(
+      bonds.map(async (bond, index) => {
+        const memberCount = parseInt(rawResults.raw[index]?.member_count || '0', 10);
+        
+        // Get last few members
+        const lastMembers = await this.bondRepository.query(`
+          SELECT 
+            bu.bond_id as bondId,
+            bu.user_id as userId,
+            u.full_name as fullName,
+            u.user_name as userName,
+            u.profile_image as profileImage
+          FROM bonds_users bu
+          JOIN users u ON u.id = bu.user_id
+          WHERE bu.bond_id = ?
+          ORDER BY bu.user_id DESC
+          LIMIT 5
+        `, [bond.id]);
+
+        // Get recent activities
+        const recentActivities = await this.bondRepository.query(`
+          SELECT 
+            a.id, a.title, a.description, a.cover_image,
+            a.start_date, a.end_date, a.location
+          FROM activities a
+          JOIN activity_bonds ab ON a.id = ab.activity_id
+          WHERE ab.bond_id = ?
+          ORDER BY a.start_date DESC
+          LIMIT 3
+        `, [bond.id]);
+
+        return {
+          ...bond,
+          member_count: memberCount,
+          lastMembers,
+          recentActivities,
+          hasJoined: false, // Admin context
+          isCoOrganizer: false, // Admin context
+        };
+      })
+    );
+
+    const totalPages = Math.ceil(total / limit);
+
+    return {
+      bonds: enrichedBonds,
+      total,
+      page,
+      limit,
+      total_pages: totalPages,
+      filters_info: {
+        applied_filters: ['is_trending: true', 'is_hidden: false'],
+        sort_by: 'engagement_score',
+        sort_order: 'DESC',
+      },
+    };
   }
 
   /* ------------------------------------------------------------------ */

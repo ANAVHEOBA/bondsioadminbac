@@ -29,6 +29,15 @@ export class FilterActivityDto {
   @Transform(({ value }) => value === 'true')
   is_public?: boolean
 
+  @ApiProperty({
+    required: false,
+    description: "Filter by visibility: 'public' | 'private' | 'bond_only'",
+    enum: ['public', 'private', 'bond_only'],
+  })
+  @IsOptional()
+  @IsString()
+  visibility?: 'public' | 'private' | 'bond_only'
+
   @ApiProperty({ required: false, description: 'Get trending activities (most participants)' })
   @IsOptional()
   @IsBoolean()
