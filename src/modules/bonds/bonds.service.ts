@@ -796,8 +796,7 @@ export class BondsService {
       .leftJoin('user_interests', 'ui', 'ui.id = bui.user_interest_id')
       .leftJoin('bond_reports', 'br', 'br.bond_id = bond.id')
       .addSelect('COUNT(DISTINCT bu.user_id)', 'member_count')
-      .groupBy('bond.id')
-      .addGroupBy('creator.id');
+      .groupBy('bond.id, creator.id');
 
     const filtersApplied: string[] = [];
 
@@ -1049,9 +1048,7 @@ export class BondsService {
       .leftJoin('bonds_users', 'bu', 'bu.bond_id = bond.id')
       .leftJoin('bond_reports', 'br', 'br.bond_id = bond.id')
       .addSelect('COUNT(DISTINCT bu.user_id)', 'member_count')
-      .groupBy('bond.id')
-      .addGroupBy('creator.id')
-      .addGroupBy('userInterests.id');
+      .groupBy('bond.id, creator.id, userInterests.id');
 
     const filtersApplied: string[] = [];
 
@@ -1240,10 +1237,7 @@ export class BondsService {
       .leftJoin('bonds_users', 'bu', 'bu.bond_id = bond.id')
       .addSelect('COUNT(DISTINCT bu.user_id)', 'member_count')
       .where('bond.is_trending = :is_trending', { is_trending: true })
-      .andWhere("JSON_EXTRACT(COALESCE(bond.metadata, '{}'), '$.hidden_at') IS NULL") // Exclude hidden
-      .groupBy('bond.id')
-      .addGroupBy('creator.id')
-      .addGroupBy('userInterests.id')
+      .groupBy('bond.id, creator.id, userInterests.id')
       .orderBy('bond.likes_count', 'DESC')
       .addOrderBy('member_count', 'DESC')
       .addOrderBy('bond.view_count', 'DESC');
@@ -1318,6 +1312,253 @@ export class BondsService {
         sort_order: 'DESC',
       },
     };
+  }
+
+  async getBondsByCreator(
+    userId: string,
+    page = 1,
+    limit = 20,
+    includeHidden = false,
+  ): Promise<{
+    bonds: any[];
+    total: number;
+    creator: {
+      id: string;
+      full_name: string;
+      user_name: string;
+      email: string;
+      profile_image: string;
+      member_since: Date | null;
+    } | null;
+  }> {
+    // First, validate that the creator exists
+    const creator = await this.userRepository
+      .createQueryBuilder('user')
+      .select([
+        'user.id',
+        'user.full_name',
+        'user.user_name',
+        'user.email',
+        'user.profile_image',
+        'user.created_at',
+      ])
+      .where('user.id = :userId', { userId })
+      .getOne();
+
+    if (!creator) {
+      throw new NotFoundException(`Creator with ID ${userId} not found`);
+    }
+
+    const queryBuilder = this.bondRepository
+      .createQueryBuilder('bond')
+      .leftJoinAndSelect('bond.creator', 'creator')
+      .leftJoinAndSelect('bond.userInterests', 'userInterests')
+      .leftJoin('bonds_users', 'bu', 'bu.bond_id = bond.id')
+      .addSelect('COUNT(DISTINCT bu.user_id)', 'member_count')
+      .where('bond.creator_id = :userId', { userId })
+      .groupBy('bond.id, creator.id, userInterests.id')
+      .orderBy('bond.created_at', 'DESC');
+
+    // Get total count
+    const totalQuery = queryBuilder.clone();
+    const totalResult = await totalQuery.getRawMany();
+    const total = totalResult.length;
+
+    // Apply pagination
+    const skip = (page - 1) * limit;
+    queryBuilder.offset(skip).limit(limit);
+
+    // Execute query
+    const rawResults = await queryBuilder.getRawAndEntities();
+    const bonds = rawResults.entities;
+
+    // Enrich bonds with additional data
+    const enrichedBonds = await Promise.all(
+      bonds.map(async (bond, index) => {
+        const memberCount = parseInt(rawResults.raw[index]?.member_count || '0', 10);
+        
+        // Get last few members
+        const lastMembers = await this.bondRepository.query(`
+          SELECT 
+            bu.bond_id as bondId,
+            bu.user_id as userId,
+            u.full_name as fullName,
+            u.user_name as userName,
+            u.profile_image as profileImage
+          FROM bonds_users bu
+          JOIN users u ON u.id = bu.user_id
+          WHERE bu.bond_id = ?
+          ORDER BY bu.user_id DESC
+          LIMIT 5
+        `, [bond.id]);
+
+        // Get recent activities
+        const recentActivities = await this.bondRepository.query(`
+          SELECT 
+            a.id, a.title, a.description, a.cover_image,
+            a.start_date, a.end_date, a.location
+          FROM activities a
+          JOIN activity_bonds ab ON a.id = ab.activity_id
+          WHERE ab.bond_id = ?
+          ORDER BY a.start_date DESC
+          LIMIT 3
+        `, [bond.id]);
+
+        return {
+          ...bond,
+          member_count: memberCount,
+          lastMembers,
+          recentActivities,
+          hasJoined: false, // Admin context
+          isCoOrganizer: false, // Admin context
+        };
+      })
+    );
+
+    return {
+      bonds: enrichedBonds,
+      total,
+      creator: {
+        id: creator.id,
+        full_name: creator.full_name,
+        user_name: creator.user_name,
+        email: creator.email,
+        profile_image: creator.profile_image,
+        member_since: creator.created_at,
+      },
+    };
+  }
+
+  async getTopBondCreatorsRanked(queryDto: any): Promise<{ creators: any[]; total: number; query_info: any }> {
+    const { 
+      page = 1, 
+      limit = 10, 
+      sort_by = 'bond_count', 
+      min_bonds = 1, 
+      days_back = 0, 
+      include_hidden = false 
+    } = queryDto;
+    
+    const skip = (page - 1) * limit;
+    
+    // Build date filter if days_back is specified
+    let dateFilter = '';
+    const params: any[] = [];
+    
+    if (days_back > 0) {
+      dateFilter = 'AND b.created_at >= NOW() - INTERVAL ? DAY';
+      params.push(days_back);
+    }
+    
+    // Build hidden filter - for bonds we don't have hidden_at, so we'll skip this for now
+    // const hiddenFilter = include_hidden ? '' : 'AND JSON_EXTRACT(COALESCE(b.metadata, \'{}\'), \'$.hidden_at\') IS NULL';
+    const hiddenFilter = ''; // Skip hidden filter until metadata column is properly implemented
+    
+    // Build the main query
+    const query = `
+      SELECT 
+        u.id as creator_id,
+        u.full_name as creator_name,
+        u.user_name,
+        u.profile_image,
+        u.email,
+        u.created_at as member_since,
+        COUNT(DISTINCT b.id) as bond_count,
+        COALESCE(SUM(member_counts.member_count), 0) as total_members,
+        COALESCE(AVG(member_counts.member_count), 0) as avg_members,
+        COALESCE(SUM(b.likes_count), 0) as total_likes,
+        COALESCE(SUM(b.view_count), 0) as total_views,
+        ROUND(
+          (COUNT(DISTINCT b.id) * 0.4) + 
+          (COALESCE(SUM(member_counts.member_count), 0) * 0.3) + 
+          (COALESCE(SUM(b.likes_count), 0) * 0.2) +
+          (COALESCE(SUM(b.view_count), 0) * 0.1), 2
+        ) as engagement_score
+      FROM users u
+      JOIN bonds b ON u.id = b.creator_id
+      LEFT JOIN (
+        SELECT 
+          bond_id, 
+          COUNT(user_id) as member_count
+        FROM bonds_users 
+        GROUP BY bond_id
+      ) member_counts ON b.id = member_counts.bond_id
+      WHERE 1=1 ${dateFilter} ${hiddenFilter}
+      GROUP BY u.id, u.full_name, u.user_name, u.profile_image, u.email, u.created_at
+      HAVING COUNT(DISTINCT b.id) >= ?
+      ORDER BY ${this.getBondCreatorSortField(sort_by)} DESC
+      LIMIT ? OFFSET ?
+    `;
+    
+    // Count query for total
+    const countQuery = `
+      SELECT COUNT(DISTINCT u.id) as total
+      FROM users u
+      JOIN bonds b ON u.id = b.creator_id
+      WHERE 1=1 ${dateFilter} ${hiddenFilter}
+      GROUP BY u.id
+      HAVING COUNT(DISTINCT b.id) >= ?
+    `;
+    
+    // Add parameters
+    const queryParams = [...params, min_bonds, limit, skip];
+    const countParams = [...params, min_bonds];
+    
+    const [creators, countResult] = await Promise.all([
+      this.bondRepository.query(query, queryParams),
+      this.bondRepository.query(`SELECT COUNT(*) as total FROM (${countQuery}) as subquery`, countParams)
+    ]);
+    
+    const total = parseInt(countResult[0]?.total || '0', 10);
+    
+    // Format the results
+    const formattedCreators = creators.map((creator: any) => ({
+      creator_id: creator.creator_id,
+      creator_name: creator.creator_name || 'Unknown',
+      user_name: creator.user_name,
+      profile_image: creator.profile_image,
+      email: creator.email,
+      member_since: creator.member_since,
+      bond_count: parseInt(creator.bond_count, 10),
+      total_members: parseInt(creator.total_members, 10),
+      avg_members: Math.round(parseFloat(creator.avg_members || '0') * 100) / 100,
+      total_likes: parseInt(creator.total_likes, 10),
+      total_views: parseInt(creator.total_views, 10),
+      engagement_score: parseFloat(creator.engagement_score || '0'),
+    }));
+    
+    return {
+      creators: formattedCreators,
+      total,
+      query_info: {
+        page,
+        limit,
+        sort_by,
+        min_bonds,
+        days_back,
+        include_hidden,
+        total_pages: Math.ceil(total / limit)
+      }
+    };
+  }
+
+  private getBondCreatorSortField(sortBy: string): string {
+    switch (sortBy) {
+      case 'bond_count':
+        return 'COUNT(DISTINCT b.id)';
+      case 'total_members':
+        return 'COALESCE(SUM(member_counts.member_count), 0)';
+      case 'avg_members':
+        return 'COALESCE(AVG(member_counts.member_count), 0)';
+      case 'total_likes':
+        return 'COALESCE(SUM(b.likes_count), 0)';
+      case 'total_views':
+        return 'COALESCE(SUM(b.view_count), 0)';
+      case 'engagement_score':
+        return 'engagement_score';
+      default:
+        return 'COUNT(DISTINCT b.id)';
+    }
   }
 
   /* ------------------------------------------------------------------ */
