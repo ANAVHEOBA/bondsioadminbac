@@ -879,14 +879,15 @@ export class BondsService {
     }
 
     // Hidden status filter
-    if (is_hidden !== undefined) {
-      if (is_hidden) {
-        queryBuilder.andWhere("JSON_EXTRACT(COALESCE(bond.metadata, '{}'), '$.hidden_at') IS NOT NULL");
-      } else {
-        queryBuilder.andWhere("JSON_EXTRACT(COALESCE(bond.metadata, '{}'), '$.hidden_at') IS NULL");
-      }
-      filtersApplied.push(`is_hidden: ${is_hidden}`);
-    }
+    // TODO: Temporarily disabled until metadata column is added to database
+    // if (is_hidden !== undefined) {
+    //   if (is_hidden) {
+    //     queryBuilder.andWhere("JSON_EXTRACT(COALESCE(bond.metadata, '{}'), '$.hidden_at') IS NOT NULL");
+    //   } else {
+    //     queryBuilder.andWhere("JSON_EXTRACT(COALESCE(bond.metadata, '{}'), '$.hidden_at') IS NULL");
+    //   }
+    //   filtersApplied.push(`is_hidden: ${is_hidden}`);
+    // }
 
     // Trending status filter
     if (is_trending !== undefined) {

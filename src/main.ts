@@ -16,10 +16,12 @@ async function bootstrap() {
     }),
   );
 
-  // CORS
+  // CORS - Allow all origins (TODO: Restrict in production)
   app.enableCors({
-    origin: process.env.ADMIN_FRONTEND_URL || 'http://localhost:3000',
+    origin: true, // Allows all origins
     credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
   });
 
   // Swagger documentation with better auth config
