@@ -56,6 +56,9 @@ export class Bond {
   @Column({ type: 'int', default: 0 })
   likes_count: number
 
+  @Column({ type: 'json', nullable: true })
+  metadata: any
+
   @ManyToMany(() => User, user => user.liked_bonds, { cascade: true })
   @JoinTable({
     name: 'bonds_likes',

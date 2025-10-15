@@ -1,4 +1,4 @@
-import { Controller, Get, Patch, Param, Query, UseGuards, Body } from '@nestjs/common';
+import { Controller, Get, Patch, Param, Query, UseGuards, Body, ParseIntPipe } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiQuery, ApiParam, ApiBearerAuth, ApiResponse } from '@nestjs/swagger';
 import { BondsService } from './bonds.service';
 import { AdminGuard } from '../admin/guards/admin/admin.guard';
@@ -8,6 +8,10 @@ import { BondAnalyticsDto } from './dto/bond-analytics.dto';
 import { AdvancedSearchBondDto, BondSearchResponseDto } from './dto/advanced-search-bond.dto';
 import { AdminListBondsDto, AdminListBondsResponseDto } from './dto/admin-list-bonds.dto';
 import { TopBondCreatorsQueryDto } from './dto/top-bond-creators-query.dto';
+import { BondDetailResponseDto } from './dto/bond-response.dto';
+import { BondMembersResponseDto } from './dto/bond-members-response.dto';
+import { BondReportStatsResponseDto } from './dto/bond-report-stats.dto';
+import { PendingReportsResponseDto, PendingReportsQueryDto } from './dto/pending-reports-response.dto';
 
 @ApiTags('Admin - Bonds')
 @ApiBearerAuth('JWT-auth')
@@ -148,6 +152,69 @@ async getAllBondsAdmin(
     return this.bondsService.reviewBondReport(reportId, null, body.status, body.notes);
   }
 
+  @Get('admin/reports/stats')
+  @ApiOperation({ summary: 'Admin: get overall statistics about bond reports' })
+  @ApiResponse({
+    status: 200,
+    description: 'Report statistics retrieved successfully',
+    type: BondReportStatsResponseDto,
+  })
+  async getBondReportStats(): Promise<BondReportStatsResponseDto> {
+    const stats = await this.bondsService.getBondReportStatistics();
+    return {
+      code: 1,
+      message: 'Report statistics retrieved successfully',
+      data: stats,
+    };
+  }
+
+  @Get('admin/reports/pending')
+  @ApiOperation({ summary: 'Admin: quick access to pending reports only (for fast review workflow)' })
+  @ApiQuery({ 
+    name: 'page', 
+    required: false, 
+    type: Number, 
+    description: 'Page number',
+    example: 1 
+  })
+  @ApiQuery({ 
+    name: 'limit', 
+    required: false, 
+    type: Number, 
+    description: 'Items per page',
+    example: 20 
+  })
+  @ApiQuery({ 
+    name: 'sort_by', 
+    required: false, 
+    enum: ['created_at', 'bond_id'],
+    description: 'Sort field',
+    example: 'created_at' 
+  })
+  @ApiQuery({ 
+    name: 'sort_order', 
+    required: false, 
+    enum: ['ASC', 'DESC'],
+    description: 'Sort order',
+    example: 'DESC' 
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Pending reports retrieved successfully',
+    type: PendingReportsResponseDto,
+  })
+  async getPendingReports(
+    @Query() queryDto: PendingReportsQueryDto,
+  ): Promise<PendingReportsResponseDto> {
+    const { page = 1, limit = 20, sort_by = 'created_at', sort_order = 'DESC' } = queryDto;
+    const data = await this.bondsService.getPendingReports(page, limit, sort_by, sort_order);
+    return {
+      code: 1,
+      message: 'Pending reports retrieved successfully',
+      data,
+    };
+  }
+
   @Get('admin/by-creator/:userId')
   @ApiOperation({ summary: 'Admin: get all bonds by specific creator' })
   @ApiParam({ name: 'userId', type: String, description: 'Creator UUID' })
@@ -266,6 +333,152 @@ async getAllBondsAdmin(
       code: 1,
       message: 'Top bond creators retrieved successfully',
       data: results,
+    };
+  }
+
+  /* -------------  SINGLE BOND MANAGEMENT  ------------- */
+  @Get('admin/:id')
+  @ApiOperation({ summary: 'Admin: get detailed information about a specific bond' })
+  @ApiParam({ 
+    name: 'id', 
+    type: Number, 
+    description: 'Bond ID',
+    example: 1
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Bond retrieved successfully',
+    type: BondDetailResponseDto,
+  })
+  @ApiResponse({ 
+    status: 404, 
+    description: 'Bond not found' 
+  })
+  async getBondById(
+    @Param('id', ParseIntPipe) id: number,
+  ): Promise<BondDetailResponseDto> {
+    const result = await this.bondsService.findOne(id);
+    
+    if (result.code === 0) {
+      return result;
+    }
+
+    return {
+      code: 1,
+      message: 'Bond retrieved successfully',
+      data: result.data,
+    };
+  }
+
+  /* -------------  BOND VISIBILITY CONTROL  ------------- */
+  @Patch('admin/:id/hide')
+  @ApiOperation({ summary: 'Admin: hide a bond from public view (soft delete)' })
+  @ApiParam({ 
+    name: 'id', 
+    type: Number, 
+    description: 'Bond ID',
+    example: 1
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Bond hidden successfully',
+    schema: {
+      type: 'object',
+      properties: {
+        code: { type: 'number', example: 1 },
+        message: { type: 'string', example: 'Bond hidden successfully' }
+      }
+    }
+  })
+  @ApiResponse({ 
+    status: 404, 
+    description: 'Bond not found' 
+  })
+  async hideBond(
+    @Param('id', ParseIntPipe) id: number,
+  ): Promise<{ code: number; message: string }> {
+    await this.bondsService.hideBond(id);
+    return {
+      code: 1,
+      message: 'Bond hidden successfully',
+    };
+  }
+
+  @Patch('admin/:id/unhide')
+  @ApiOperation({ summary: 'Admin: restore a previously hidden bond' })
+  @ApiParam({ 
+    name: 'id', 
+    type: Number, 
+    description: 'Bond ID',
+    example: 1
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Bond unhidden successfully',
+    schema: {
+      type: 'object',
+      properties: {
+        code: { type: 'number', example: 1 },
+        message: { type: 'string', example: 'Bond unhidden successfully' }
+      }
+    }
+  })
+  @ApiResponse({ 
+    status: 404, 
+    description: 'Bond not found' 
+  })
+  async unhideBond(
+    @Param('id', ParseIntPipe) id: number,
+  ): Promise<{ code: number; message: string }> {
+    await this.bondsService.unhideBond(id);
+    return {
+      code: 1,
+      message: 'Bond unhidden successfully',
+    };
+  }
+
+  /* -------------  MEMBER MANAGEMENT  ------------- */
+  @Get('admin/:id/members')
+  @ApiOperation({ summary: 'Admin: get detailed list of all members in a bond with pagination' })
+  @ApiParam({ 
+    name: 'id', 
+    type: Number, 
+    description: 'Bond ID',
+    example: 1
+  })
+  @ApiQuery({ 
+    name: 'page', 
+    required: false, 
+    type: Number, 
+    description: 'Page number',
+    example: 1
+  })
+  @ApiQuery({ 
+    name: 'limit', 
+    required: false, 
+    type: Number, 
+    description: 'Items per page',
+    example: 20
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Bond members retrieved successfully',
+    type: BondMembersResponseDto,
+  })
+  @ApiResponse({ 
+    status: 404, 
+    description: 'Bond not found' 
+  })
+  async getBondMembers(
+    @Param('id', ParseIntPipe) id: number,
+    @Query('page') page = 1,
+    @Query('limit') limit = 20,
+  ): Promise<BondMembersResponseDto> {
+    const data = await this.bondsService.getBondMembers(id, +page, +limit);
+    return {
+      code: 1,
+      message: 'Bond members retrieved successfully',
+      data,
     };
   }
 

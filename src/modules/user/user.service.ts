@@ -11,9 +11,28 @@ import { NotificationPreferences } from './entities/notification-preferences.ent
 import { Country } from './entities/country.entity';
 
 /* --------------  HELPERS -------------- */
-export function toUserResponseDto(user: User) {
+export function toUserResponseDto(user: User, enrichedData?: any) {
   const out: any = { ...user };
-  out.country = user.country ? { id: user.country.id, name: user.country.name } : {};
+  out.country = user.country ? { id: user.country.id, name: user.country.name } : null;
+  
+  // Add enriched data if provided
+  if (enrichedData) {
+    out.followers_count = enrichedData.followers_count || 0;
+    out.following_count = enrichedData.following_count || 0;
+    out.bonds_count = enrichedData.bonds_count || 0;
+    out.activities_count = enrichedData.activities_count || 0;
+  }
+  
+  // Remove sensitive fields
+  delete out.password;
+  delete out.otp_email;
+  delete out.otp_phone;
+  delete out.latitude;
+  delete out.longitude;
+  delete out.social_id;
+  delete out.social_type;
+  delete out.deleted_at;
+  
   return out;
 }
 
@@ -76,7 +95,48 @@ export class UserService {
   async findOne(id: string) {
     const user = await this.repository.findOne({ where: { id }, relations: ['country'] });
     if (!user) throw new BadRequestException('User not found');
-    return toUserResponseDto(user);
+    
+    // Get enriched data (counts)
+    const enrichedData = await this.getEnrichedUserData(id);
+    
+    return toUserResponseDto(user, enrichedData);
+  }
+
+  private async getEnrichedUserData(userId: string) {
+    const [followersCount, followingCount, bondsCount, activitiesCount] = await Promise.all([
+      // Followers count
+      this.repository.query(
+        `SELECT COUNT(*) as count FROM follows WHERE following_id = ?`,
+        [userId]
+      ).then(result => parseInt(result[0]?.count || '0', 10)),
+      
+      // Following count
+      this.repository.query(
+        `SELECT COUNT(*) as count FROM follows WHERE follower_id = ?`,
+        [userId]
+      ).then(result => parseInt(result[0]?.count || '0', 10)),
+      
+      // Bonds count (bonds user is member of)
+      this.repository.query(
+        `SELECT COUNT(*) as count FROM bonds_users WHERE user_id = ?`,
+        [userId]
+      ).then(result => parseInt(result[0]?.count || '0', 10)),
+      
+      // Activities count (activities user is participating in)
+      this.repository.query(
+        `SELECT COUNT(DISTINCT activity_id) as count 
+         FROM activity_attendees 
+         WHERE user_id = ?`,
+        [userId]
+      ).then(result => parseInt(result[0]?.count || '0', 10)),
+    ]);
+
+    return {
+      followers_count: followersCount,
+      following_count: followingCount,
+      bonds_count: bondsCount,
+      activities_count: activitiesCount,
+    };
   }
 
   async remove(id: string) {

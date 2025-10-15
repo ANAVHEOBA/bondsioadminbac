@@ -32,6 +32,8 @@ import { BondStatsDto } from './dto/bond-stats.dto';
 import { BondAnalyticsDto, BondLocationAnalyticsDto, BondEngagementMetricsDto, BondCreatorAnalyticsDto, BondInterestAnalyticsDto, BondGrowthMetricsDto } from './dto/bond-analytics.dto';
 import { AdvancedSearchBondDto, BondSearchResponseDto } from './dto/advanced-search-bond.dto';
 import { AdminListBondsDto, AdminListBondsResponseDto } from './dto/admin-list-bonds.dto';
+import { BondReportStatsDto } from './dto/bond-report-stats.dto';
+import { PendingReportDto } from './dto/pending-reports-response.dto';
 
 @Injectable()
 export class BondsService {
@@ -1636,7 +1638,312 @@ export class BondsService {
     return { code: 1, message: 'Bond retrieved successfully', data: bond };
   }
 
-    /* ---------------------------------------------------------- */
+    /* ------------------------------------------------------------------ */
+  /*  ADMIN – BOND VISIBILITY CONTROL                                  */
+  /* ------------------------------------------------------------------ */
+  async hideBond(id: number): Promise<void> {
+    const bond = await this.bondRepository.findOne({ where: { id } });
+    
+    if (!bond) {
+      throw new NotFoundException(`Bond with ID ${id} not found`);
+    }
+
+    // Set hidden_at timestamp in metadata
+    const metadata = bond.metadata || {};
+    metadata.hidden_at = new Date().toISOString();
+    
+    bond.metadata = metadata;
+    await this.bondRepository.save(bond);
+    
+    // Invalidate cache
+    await this.cacheManager.del(`bond:${id}`);
+    
+    this.logger.log(`Bond ${id} hidden at ${metadata.hidden_at}`);
+  }
+
+  async unhideBond(id: number): Promise<void> {
+    const bond = await this.bondRepository.findOne({ where: { id } });
+    
+    if (!bond) {
+      throw new NotFoundException(`Bond with ID ${id} not found`);
+    }
+
+    // Remove hidden_at from metadata
+    if (bond.metadata && bond.metadata.hidden_at) {
+      delete bond.metadata.hidden_at;
+      await this.bondRepository.save(bond);
+      
+      // Invalidate cache
+      await this.cacheManager.del(`bond:${id}`);
+      
+      this.logger.log(`Bond ${id} unhidden`);
+    }
+  }
+
+  /* ------------------------------------------------------------------ */
+  /*  ADMIN – BOND MEMBER MANAGEMENT                                    */
+  /* ------------------------------------------------------------------ */
+  async getBondMembers(
+    bondId: number,
+    page = 1,
+    limit = 20,
+  ): Promise<{
+    members: any[];
+    total: number;
+    page: number;
+    limit: number;
+    total_pages: number;
+  }> {
+    // First, verify the bond exists
+    const bond = await this.bondRepository.findOne({ 
+      where: { id: bondId },
+      relations: ['co_organizers']
+    });
+    
+    if (!bond) {
+      throw new NotFoundException(`Bond with ID ${bondId} not found`);
+    }
+
+    const skip = (page - 1) * limit;
+
+    // Get co-organizer IDs for quick lookup
+    const coOrganizerIds = new Set(bond.co_organizers?.map(co => co.id) || []);
+
+    // Get total member count
+    const totalResult = await this.bondRepository.query(`
+      SELECT COUNT(DISTINCT bu.user_id) as total
+      FROM bonds_users bu
+      WHERE bu.bond_id = ?
+    `, [bondId]);
+    
+    const total = parseInt(totalResult[0]?.total || '0', 10);
+
+    // Get paginated members with details
+    const members = await this.bondRepository.query(`
+      SELECT 
+        u.id,
+        u.full_name,
+        u.user_name,
+        u.email,
+        u.profile_image,
+        u.created_at as joined_at
+      FROM bonds_users bu
+      JOIN users u ON u.id = bu.user_id
+      WHERE bu.bond_id = ?
+      ORDER BY u.full_name ASC
+      LIMIT ? OFFSET ?
+    `, [bondId, limit, skip]);
+
+    // Add co-organizer flag to each member
+    const enrichedMembers = members.map((member: any) => ({
+      id: member.id,
+      full_name: member.full_name,
+      user_name: member.user_name,
+      email: member.email,
+      profile_image: member.profile_image,
+      joined_at: member.joined_at,
+      is_co_organizer: coOrganizerIds.has(member.id),
+    }));
+
+    const totalPages = Math.ceil(total / limit);
+
+    return {
+      members: enrichedMembers,
+      total,
+      page,
+      limit,
+      total_pages: totalPages,
+    };
+  }
+
+  /* ------------------------------------------------------------------ */
+  /*  ADMIN – ENHANCED REPORT STATISTICS                                */
+  /* ------------------------------------------------------------------ */
+  async getBondReportStatistics(): Promise<BondReportStatsDto> {
+    const cacheKey = 'bond:report:stats';
+    const cached = await this.cacheManager.get<BondReportStatsDto>(cacheKey);
+    if (cached) return cached;
+
+    const now = new Date();
+    const last24h = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+    const last7d = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const last30d = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+
+    // Execute all queries in parallel for performance
+    const [
+      totalReports,
+      pendingReports,
+      reviewedReports,
+      resolvedReports,
+      dismissedReports,
+      reportsLast24h,
+      reportsLast7d,
+      reportsLast30d,
+      mostReportedBondResult,
+      mostCommonReasonResult,
+    ] = await Promise.all([
+      // Total reports
+      this.bondReportRepository.count(),
+
+      // Pending reports
+      this.bondReportRepository.count({ where: { status: ReportStatus.PENDING } }),
+
+      // Reviewed reports
+      this.bondReportRepository.count({ where: { status: ReportStatus.REVIEWED } }),
+
+      // Resolved reports
+      this.bondReportRepository.count({ where: { status: ReportStatus.RESOLVED } }),
+
+      // Dismissed reports
+      this.bondReportRepository.count({ where: { status: ReportStatus.DISMISSED } }),
+
+      // Reports in last 24 hours
+      this.bondReportRepository.count({
+        where: {
+          created_at: MoreThanOrEqual(last24h),
+        },
+      }),
+
+      // Reports in last 7 days
+      this.bondReportRepository.count({
+        where: {
+          created_at: MoreThanOrEqual(last7d),
+        },
+      }),
+
+      // Reports in last 30 days
+      this.bondReportRepository.count({
+        where: {
+          created_at: MoreThanOrEqual(last30d),
+        },
+      }),
+
+      // Most reported bond
+      this.bondReportRepository.query(`
+        SELECT 
+          br.bond_id,
+          b.name,
+          COUNT(*) as report_count
+        FROM bond_reports br
+        JOIN bonds b ON b.id = br.bond_id
+        GROUP BY br.bond_id, b.name
+        ORDER BY report_count DESC
+        LIMIT 1
+      `),
+
+      // Most common report reason
+      this.bondReportRepository.query(`
+        SELECT 
+          reason,
+          COUNT(*) as count
+        FROM bond_reports
+        GROUP BY reason
+        ORDER BY count DESC
+        LIMIT 1
+      `),
+    ]);
+
+    const mostReportedBond = mostReportedBondResult[0]
+      ? {
+          bond_id: mostReportedBondResult[0].bond_id,
+          name: mostReportedBondResult[0].name,
+          report_count: parseInt(mostReportedBondResult[0].report_count, 10),
+        }
+      : null;
+
+    const mostCommonReason = mostCommonReasonResult[0]?.reason || 'none';
+
+    const stats: BondReportStatsDto = {
+      total_reports: totalReports,
+      pending_reports: pendingReports,
+      reviewed_reports: reviewedReports,
+      resolved_reports: resolvedReports,
+      dismissed_reports: dismissedReports,
+      reports_last_24h: reportsLast24h,
+      reports_last_7d: reportsLast7d,
+      reports_last_30d: reportsLast30d,
+      most_reported_bond: mostReportedBond,
+      most_common_reason: mostCommonReason,
+    };
+
+    // Cache for 5 minutes
+    await this.cacheManager.set(cacheKey, stats, 300);
+    return stats;
+  }
+
+  async getPendingReports(
+    page = 1,
+    limit = 20,
+    sortBy = 'created_at',
+    sortOrder = 'DESC',
+  ): Promise<{
+    reports: PendingReportDto[];
+    total: number;
+    page: number;
+    limit: number;
+    total_pages: number;
+  }> {
+    const skip = (page - 1) * limit;
+
+    // Determine sort field
+    let orderByField = 'br.created_at';
+    if (sortBy === 'bond_id') {
+      orderByField = 'br.bond_id';
+    }
+
+    // Get total count of pending reports
+    const totalResult = await this.bondReportRepository.query(`
+      SELECT COUNT(*) as total
+      FROM bond_reports br
+      WHERE br.status = ?
+    `, [ReportStatus.PENDING]);
+
+    const total = parseInt(totalResult[0]?.total || '0', 10);
+
+    // Get pending reports with bond and reporter details
+    const reports = await this.bondReportRepository.query(`
+      SELECT 
+        br.id,
+        br.bond_id,
+        b.name as bond_name,
+        br.reporter_id,
+        u.full_name as reporter_name,
+        br.reason,
+        br.description,
+        br.created_at,
+        br.status
+      FROM bond_reports br
+      JOIN bonds b ON b.id = br.bond_id
+      JOIN users u ON u.id = br.reporter_id
+      WHERE br.status = ?
+      ORDER BY ${orderByField} ${sortOrder}
+      LIMIT ? OFFSET ?
+    `, [ReportStatus.PENDING, limit, skip]);
+
+    const formattedReports: PendingReportDto[] = reports.map((report: any) => ({
+      id: report.id,
+      bond_id: report.bond_id,
+      bond_name: report.bond_name,
+      reporter_id: report.reporter_id,
+      reporter_name: report.reporter_name || 'Unknown',
+      reason: report.reason,
+      description: report.description,
+      created_at: report.created_at,
+      status: report.status,
+    }));
+
+    const totalPages = Math.ceil(total / limit);
+
+    return {
+      reports: formattedReports,
+      total,
+      page,
+      limit,
+      total_pages: totalPages,
+    };
+  }
+
+  /* ---------------------------------------------------------- */
   /*  1.  missing controller entry-points                       */
   /* ---------------------------------------------------------- */
   /* ------------------------------------------------------------------ */
