@@ -200,41 +200,169 @@ export class BondsService {
   /*  ADMIN – LIST / REVIEW REPORTS                                     */
   /* ------------------------------------------------------------------ */
   async getReportedBondsAdmin(page = 1, limit = 20): Promise<{
-    bonds: {
-      bond_id: number;
-      name: string;
-      total_reports: number;
-      pending_reports: number;
-    }[];
+    bonds: any[];
     total: number;
   }> {
     const skip = (page - 1) * limit;
 
-    const raw = await this.bondReportRepository
+    // Get bond IDs with report counts
+    const bondIdsWithCounts = await this.bondReportRepository
       .createQueryBuilder('br')
       .select('br.bond_id', 'bond_id')
-      .addSelect('b.name', 'name')
       .addSelect('COUNT(*)', 'total_reports')
       .addSelect(
         'SUM(CASE WHEN br.status = :pending THEN 1 ELSE 0 END)',
         'pending_reports',
       )
-      .innerJoin(Bond, 'b', 'b.id = br.bond_id')
       .groupBy('br.bond_id')
-      .addGroupBy('b.name')
       .orderBy('total_reports', 'DESC')
       .offset(skip)
       .limit(limit)
       .setParameter('pending', ReportStatus.PENDING)
       .getRawMany();
 
+    if (bondIdsWithCounts.length === 0) {
+      return { bonds: [], total: 0 };
+    }
+
+    const bondIds = bondIdsWithCounts.map((b) => b.bond_id);
+
+    // Get full bond details with relations
+    const bonds = await this.bondRepository
+      .createQueryBuilder('bond')
+      .leftJoinAndSelect('bond.creator', 'creator')
+      .leftJoinAndSelect('bond.userInterests', 'userInterests')
+      .where('bond.id IN (:...bondIds)', { bondIds })
+      .getMany();
+
+    // Enrich bonds with member counts
+    const enriched = await this.enrichBondsWithUserData(bonds);
+
+    // Get all reports for these bonds (without JOINs to avoid collation issues)
+    const reports = await this.bondReportRepository
+      .createQueryBuilder('br')
+      .where('br.bond_id IN (:...bondIds)', { bondIds })
+      .orderBy('br.created_at', 'DESC')
+      .getMany();
+
+    // Get unique reporter IDs
+    const reporterIds = [...new Set(reports.map(r => r.reporter_id))];
+    
+    // Manually fetch reporters if there are any
+    let reporters: User[] = [];
+    if (reporterIds.length > 0) {
+      reporters = await this.bondRepository.manager
+        .createQueryBuilder(User, 'user')
+        .leftJoinAndSelect('user.country', 'country')
+        .where('user.id IN (:...reporterIds)', { reporterIds })
+        .getMany();
+    }
+    
+    // Create reporter lookup map
+    const reporterMap = new Map<string, User>(reporters.map(r => [r.id, r]));
+
+    // Group reports by bond_id and attach reporter details
+    const reportsByBond = new Map<number, any[]>();
+    reports.forEach((report) => {
+      if (!reportsByBond.has(report.bond_id)) {
+        reportsByBond.set(report.bond_id, []);
+      }
+      
+      // Get reporter from map
+      const reporter = reporterMap.get(report.reporter_id);
+      
+      reportsByBond.get(report.bond_id)!.push({
+        report_id: report.id,
+        reason: report.reason,
+        description: report.description,
+        status: report.status,
+        created_at: report.created_at,
+        reviewed_by: report.reviewed_by,
+        review_notes: report.review_notes,
+        reviewed_at: report.reviewed_at,
+        reporter: reporter ? {
+          id: reporter.id,
+          full_name: reporter.full_name,
+          user_name: reporter.user_name,
+          email: reporter.email,
+          profile_image: reporter.profile_image,
+          country: reporter.country ? {
+            id: reporter.country.id,
+            name: reporter.country.name
+          } : null
+        } : null
+      });
+    });
+
+    // Combine everything
+    const result = enriched.map((bond) => {
+      const counts = bondIdsWithCounts.find((b) => b.bond_id === bond.id);
+      const bondReports = reportsByBond.get(bond.id) || [];
+      
+      return {
+        // Full bond details
+        id: bond.id,
+        name: bond.name,
+        description: bond.description,
+        banner: bond.banner,
+        city: bond.city,
+        is_public: bond.is_public,
+        request_to_join: bond.request_to_join,
+        is_unlimited_members: bond.is_unlimited_members,
+        max_members: bond.max_members,
+        is_trending: bond.is_trending,
+        view_count: bond.view_count,
+        likes_count: bond.likes_count,
+        is_hidden: bond.metadata?.hidden_at !== null && bond.metadata?.hidden_at !== undefined,
+        hidden_at: bond.metadata?.hidden_at || null,
+        created_at: bond.created_at,
+        updated_at: bond.updated_at,
+        
+        // Creator details
+        creator: bond.creator ? {
+          id: bond.creator.id,
+          full_name: bond.creator.full_name,
+          user_name: bond.creator.user_name,
+          email: bond.creator.email,
+          profile_image: bond.creator.profile_image
+        } : null,
+        
+        // Interests (using 'interest' field, not 'name')
+        interests: bond.userInterests?.map((i) => ({
+          id: i.id,
+          name: i.interest  // The field is called 'interest' in UserInterest entity
+        })) || [],
+        
+        // Member counts
+        members_count: bond.members_count || 0,
+        
+        // Report statistics
+        total_reports: Number(counts?.total_reports || 0),
+        pending_reports: Number(counts?.pending_reports || 0),
+        reviewed_reports: bondReports.filter(r => r.status === ReportStatus.REVIEWED).length,
+        resolved_reports: bondReports.filter(r => r.status === ReportStatus.RESOLVED).length,
+        dismissed_reports: bondReports.filter(r => r.status === ReportStatus.DISMISSED).length,
+        
+        // Full reports list with reporter details
+        reports: bondReports,
+        
+        // Unique reporters
+        unique_reporters: [...new Set(bondReports.map(r => r.reporter?.id))].length,
+        reporters_summary: bondReports
+          .map(r => r.reporter)
+          .filter((r, i, arr) => r && arr.findIndex(x => x?.id === r.id) === i)
+          .slice(0, 5) // Top 5 unique reporters
+      };
+    });
+
+    // Get total count
     const total = await this.bondReportRepository
       .createQueryBuilder('br')
       .select('COUNT(DISTINCT br.bond_id)', 'count')
       .getRawOne()
       .then((r) => Number(r.count));
 
-    return { bonds: raw, total };
+    return { bonds: result, total };
   }
 
   /* ------------------------------------------------------------------ */

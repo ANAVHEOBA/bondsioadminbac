@@ -124,10 +124,14 @@ export class UserService {
       
       // Activities count (activities user is participating in)
       this.repository.query(
-        `SELECT COUNT(DISTINCT activity_id) as count 
-         FROM activity_attendees 
-         WHERE user_id = ?`,
-        [userId]
+        `SELECT COUNT(DISTINCT activity_id) as count FROM (
+           SELECT activity_id FROM activity_participants WHERE user_id = ?
+           UNION
+           SELECT activity_id FROM activity_co_organizers WHERE user_id = ?
+           UNION
+           SELECT id as activity_id FROM activities WHERE creator_id = ?
+         ) AS user_activities`,
+        [userId, userId, userId]
       ).then(result => parseInt(result[0]?.count || '0', 10)),
     ]);
 

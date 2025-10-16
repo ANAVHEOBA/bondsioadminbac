@@ -391,6 +391,216 @@ export class ActivityController {
     };
   }
 
+  /* -------------  REPORTS  ------------- */
+  @Get('reports/stats')
+  @ApiOperation({ summary: 'Admin: get report statistics' })
+  @ApiResponse({
+    status: 200,
+    description: 'Report statistics retrieved successfully',
+    type: ReportStatsDto,
+  })
+  async getReportStats(): Promise<{ code: number; message: string; data: ReportStatsDto }> {
+    const stats = await this.activityService.getReportStats();
+    return {
+      code: 1,
+      message: 'Report statistics retrieved successfully',
+      data: stats,
+    };
+  }
+
+  @Get('reports/pending')
+  @ApiOperation({ summary: 'Admin: get only pending reports for quick review' })
+  @ApiQuery({ 
+    name: 'page', 
+    required: false, 
+    type: Number, 
+    description: 'Page number (starts from 1)',
+    example: 1
+  })
+  @ApiQuery({ 
+    name: 'limit', 
+    required: false, 
+    type: Number, 
+    description: 'Number of items per page',
+    example: 20
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Pending reports retrieved successfully',
+    schema: {
+      type: 'object',
+      properties: {
+        code: { type: 'number', example: 1 },
+        message: { type: 'string', example: 'Pending reports retrieved successfully' },
+        data: {
+          type: 'object',
+          properties: {
+            reports: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  id: { type: 'number', example: 1 },
+                  activity_id: { type: 'number', example: 24 },
+                  reporter_id: { type: 'string', example: '47c97128-49e0-4234-90a5-94b231b358bd' },
+                  reason: { type: 'string', example: 'inappropriate_content' },
+                  description: { type: 'string', example: 'This activity contains inappropriate content' },
+                  status: { type: 'string', example: 'pending' },
+                  created_at: { type: 'string', format: 'date-time' },
+                  activity: { type: 'object' },
+                  reporter: { type: 'object' }
+                }
+              }
+            },
+            total: { type: 'number', example: 5 }
+          }
+        }
+      }
+    }
+  })
+  async getPendingReports(@Query() q: { page?: number; limit?: number }) {
+    const { reports, total } = await this.activityService.getPendingReports(
+      q.page || 1,
+      q.limit || 20,
+    );
+    return {
+      code: 1,
+      message: 'Pending reports retrieved successfully',
+      data: { reports, total },
+    };
+  }
+
+  @Get('reports')
+  @ApiOperation({ summary: 'Admin: view all activity reports' })
+  async getAllReports(@Query() q: { page?: number; limit?: number }) {
+    const { reports, total } = await this.activityService.getAllReports(
+      q.page,
+      q.limit,
+    );
+    return {
+      code: 1,
+      message: 'All reports retrieved',
+      data: { reports, total },
+    };
+  }
+
+  @Patch('reports/:reportId/status')
+  @ApiOperation({ 
+    summary: 'Admin: update activity report status and add review notes',
+    description: `
+      Updates the status of an activity report and optionally adds admin review notes.
+      
+      **Process:**
+      1. Admin reviews the reported activity
+      2. Changes status (pending → reviewed/resolved/dismissed)
+      3. Adds review notes explaining the decision
+      4. System records: reviewer ID, review timestamp, notes
+      
+      **Status Options:**
+      - **pending**: Initial state when report is created
+      - **reviewed**: Admin has reviewed but action pending
+      - **resolved**: Issue addressed (e.g., activity hidden/deleted)
+      - **dismissed**: Report found invalid or unsubstantiated
+      
+      **Example Workflow:**
+      1. User reports activity with inappropriate content
+      2. Admin reviews → sets status to "reviewed"
+      3. Admin hides the activity
+      4. Admin updates report to "resolved" with notes
+    `
+  })
+  @ApiConsumes('application/json')
+  @ApiParam({ 
+    name: 'reportId', 
+    type: Number,
+    description: 'Report ID to update',
+    example: 1
+  })
+  @ApiBody({ 
+    type: UpdateReportStatusFormDto,
+    description: 'Report status and optional review notes',
+    examples: {
+      resolved: {
+        summary: 'Mark as resolved',
+        value: {
+          status: 'resolved',
+          notes: 'Activity violated community guidelines and has been hidden. User warned.'
+        }
+      },
+      dismissed: {
+        summary: 'Dismiss report',
+        value: {
+          status: 'dismissed',
+          notes: 'No violation found after review. Content complies with guidelines.'
+        }
+      },
+      reviewed: {
+        summary: 'Mark as reviewed',
+        value: {
+          status: 'reviewed',
+          notes: 'Report acknowledged. Investigating further with moderation team.'
+        }
+      }
+    }
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Report status updated successfully',
+    schema: {
+      type: 'object',
+      properties: {
+        code: { type: 'number', example: 1 },
+        message: { type: 'string', example: 'Report status updated' },
+        data: {
+          type: 'object',
+          properties: {
+            id: { type: 'number', example: 1 },
+            activity_id: { type: 'number', example: 24 },
+            reporter_id: { type: 'string', example: '47c97128-49e0-4234-90a5-94b231b358bd' },
+            reason: { type: 'string', example: 'inappropriate_content' },
+            description: { type: 'string', example: 'This activity contains inappropriate content' },
+            status: { type: 'string', example: 'resolved' },
+            reviewed_by: { type: 'string', example: 'fdb74f12-92ca-11f0-a7b4-a2aa00234146' },
+            review_notes: { type: 'string', example: 'Activity hidden after review' },
+            reviewed_at: { type: 'string', format: 'date-time' },
+            created_at: { type: 'string', format: 'date-time' },
+            updated_at: { type: 'string', format: 'date-time' },
+            activity: { type: 'object', description: 'Reported activity details' },
+            reporter: { type: 'object', description: 'User who reported' }
+          }
+        }
+      }
+    }
+  })
+  @ApiResponse({ 
+    status: 404, 
+    description: 'Report not found'
+  })
+  @ApiResponse({ 
+    status: 400, 
+    description: 'Invalid status value'
+  })
+  async updateReportStatus(
+    @Param('reportId', ParseIntPipe) reportId: number,
+    @Body() updateDto: UpdateReportStatusFormDto,
+  ) {
+    const adminId = 'fdb74f12-92ca-11f0-a7b4-a2aa00234146'; // TODO: Extract from JWT token
+
+    // Update report with new status and review notes
+    const updated = await this.activityService.reviewReport(
+      reportId, 
+      adminId, 
+      updateDto.status, 
+      updateDto.notes
+    );
+
+    return {
+      code: 1,
+      message: 'Report status updated',
+      data: plainToInstance(ReportResponseDto, updated),
+    };
+  }
+
   /* -------------  SINGLE DETAIL  ------------- */
   @Get(':id')
   @ApiOperation({ summary: 'Admin: single activity details' })
@@ -514,126 +724,6 @@ export class ActivityController {
       data: { participants, total, activity_info },
     };
   }
-
-  /* -------------  REPORTS  ------------- */
-  @Get('reports/stats')
-  @ApiOperation({ summary: 'Admin: get report statistics' })
-  @ApiResponse({
-    status: 200,
-    description: 'Report statistics retrieved successfully',
-    type: ReportStatsDto,
-  })
-  async getReportStats(): Promise<{ code: number; message: string; data: ReportStatsDto }> {
-    const stats = await this.activityService.getReportStats();
-    return {
-      code: 1,
-      message: 'Report statistics retrieved successfully',
-      data: stats,
-    };
-  }
-
-  @Get('reports/pending')
-  @ApiOperation({ summary: 'Admin: get only pending reports for quick review' })
-  @ApiQuery({ 
-    name: 'page', 
-    required: false, 
-    type: Number, 
-    description: 'Page number (starts from 1)',
-    example: 1
-  })
-  @ApiQuery({ 
-    name: 'limit', 
-    required: false, 
-    type: Number, 
-    description: 'Number of items per page',
-    example: 20
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'Pending reports retrieved successfully',
-    schema: {
-      type: 'object',
-      properties: {
-        code: { type: 'number', example: 1 },
-        message: { type: 'string', example: 'Pending reports retrieved successfully' },
-        data: {
-          type: 'object',
-          properties: {
-            reports: {
-              type: 'array',
-              items: {
-                type: 'object',
-                properties: {
-                  id: { type: 'number', example: 1 },
-                  activity_id: { type: 'number', example: 24 },
-                  reporter_id: { type: 'string', example: '47c97128-49e0-4234-90a5-94b231b358bd' },
-                  reason: { type: 'string', example: 'inappropriate_content' },
-                  description: { type: 'string', example: 'This activity contains inappropriate content' },
-                  status: { type: 'string', example: 'pending' },
-                  created_at: { type: 'string', format: 'date-time' },
-                  activity: { type: 'object' },
-                  reporter: { type: 'object' }
-                }
-              }
-            },
-            total: { type: 'number', example: 5 }
-          }
-        }
-      }
-    }
-  })
-  async getPendingReports(@Query() q: { page?: number; limit?: number }) {
-    const { reports, total } = await this.activityService.getPendingReports(
-      q.page || 1,
-      q.limit || 20,
-    );
-    return {
-      code: 1,
-      message: 'Pending reports retrieved successfully',
-      data: { reports, total },
-    };
-  }
-
-  @Get('reports')
-  @ApiOperation({ summary: 'Admin: view all activity reports' })
-  async getAllReports(@Query() q: { page?: number; limit?: number }) {
-    const { reports, total } = await this.activityService.getAllReports(
-      q.page,
-      q.limit,
-    );
-    return {
-      code: 1,
-      message: 'All reports retrieved',
-      data: { reports, total },
-    };
-  }
-
-  @Patch('reports/:reportId/status')
-  @Patch('admin/reports/:reportId/status')
-@ApiOperation({ summary: 'Admin: update report status / resolve report (form-data)' })
-@ApiConsumes('multipart/form-data')
-@ApiParam({ name: 'reportId', type: Number })
-@ApiBody({ type: UpdateReportStatusFormDto })
-async updateReportStatus(
-  @Param('reportId', ParseIntPipe) reportId: number,
-  @Body() updateDto: UpdateReportStatusFormDto,
-) {
-  const adminId = 'fdb74f12-92ca-11f0-a7b4-a2aa00234146'; // real admin ID from JWT
-
-  // ✅ Use the returned fresh entity
-  const updated = await this.activityService.reviewReport(
-    reportId, 
-    adminId, 
-    updateDto.status, 
-    updateDto.notes
-  );
-
-  return {
-    code: 1,
-    message: 'Report status updated',
-    data: plainToInstance(ReportResponseDto, updated),
-  };
-}
 
   
 }

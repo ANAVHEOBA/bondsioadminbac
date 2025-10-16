@@ -120,9 +120,147 @@ async getAllBondsAdmin(
 }
 
   @Get('admin/reported-bonds')
-  @ApiOperation({ summary: 'List all bonds that have reports (admin)' })
-  @ApiQuery({ name: 'page', required: false, type: Number })
-  @ApiQuery({ name: 'limit', required: false, type: Number })
+  @ApiOperation({ 
+    summary: 'List all bonds with reports - comprehensive details',
+    description: `
+      Returns bonds that have been reported by users, with full bond details,
+      all reports, and reporter information.
+      
+      **Includes:**
+      - Full bond details (name, description, cover image, visibility, etc.)
+      - Creator information
+      - Member counts
+      - All interests/tags
+      - Report statistics by status
+      - Complete list of reports with reporter details
+      - Top reporters summary
+      
+      Sorted by total report count (most reported first)
+    `
+  })
+  @ApiQuery({ 
+    name: 'page', 
+    required: false, 
+    type: Number,
+    description: 'Page number',
+    example: 1
+  })
+  @ApiQuery({ 
+    name: 'limit', 
+    required: false, 
+    type: Number,
+    description: 'Items per page',
+    example: 20
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Reported bonds retrieved successfully',
+    schema: {
+      type: 'object',
+      properties: {
+        bonds: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              id: { type: 'number', example: 11 },
+              name: { type: 'string', example: 'Flower Lovers' },
+              description: { type: 'string', example: 'A community for flower enthusiasts' },
+              banner: { type: 'string', example: 'https://example.com/banner.jpg' },
+              city: { type: 'string', example: 'New York' },
+              is_public: { type: 'boolean', example: true },
+              request_to_join: { type: 'boolean', example: false },
+              is_unlimited_members: { type: 'boolean', example: true },
+              max_members: { type: 'number', example: 100, nullable: true },
+              is_trending: { type: 'boolean', example: false },
+              view_count: { type: 'number', example: 250 },
+              likes_count: { type: 'number', example: 45 },
+              is_hidden: { type: 'boolean', example: false },
+              hidden_at: { type: 'string', format: 'date-time', nullable: true },
+              created_at: { type: 'string', format: 'date-time' },
+              updated_at: { type: 'string', format: 'date-time' },
+              creator: {
+                type: 'object',
+                properties: {
+                  id: { type: 'string', example: '47c97128-49e0-4234-90a5-94b231b358bd' },
+                  full_name: { type: 'string', example: 'John Doe' },
+                  user_name: { type: 'string', example: 'johndoe' },
+                  email: { type: 'string', example: 'john@example.com' },
+                  profile_image: { type: 'string', example: 'https://example.com/profile.jpg' }
+                }
+              },
+              interests: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    id: { type: 'number', example: 5 },
+                    name: { type: 'string', example: 'Gardening' }
+                  }
+                }
+              },
+              members_count: { type: 'number', example: 45 },
+              total_reports: { type: 'number', example: 3 },
+              pending_reports: { type: 'number', example: 1 },
+              reviewed_reports: { type: 'number', example: 1 },
+              resolved_reports: { type: 'number', example: 0 },
+              dismissed_reports: { type: 'number', example: 1 },
+              unique_reporters: { type: 'number', example: 3 },
+              reports: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    report_id: { type: 'number', example: 1 },
+                    reason: { type: 'string', enum: ['inappropriate_content', 'spam', 'harassment', 'false_information', 'safety_concerns', 'other'] },
+                    description: { type: 'string', example: 'This bond contains inappropriate content' },
+                    status: { type: 'string', enum: ['pending', 'reviewed', 'resolved', 'dismissed'] },
+                    created_at: { type: 'string', format: 'date-time' },
+                    reviewed_by: { type: 'string', nullable: true },
+                    review_notes: { type: 'string', nullable: true },
+                    reviewed_at: { type: 'string', format: 'date-time', nullable: true },
+                    reporter: {
+                      type: 'object',
+                      properties: {
+                        id: { type: 'string', example: '47c97128-49e0-4234-90a5-94b231b358bd' },
+                        full_name: { type: 'string', example: 'Jane Smith' },
+                        user_name: { type: 'string', example: 'janesmith' },
+                        email: { type: 'string', example: 'jane@example.com' },
+                        profile_image: { type: 'string', example: 'https://example.com/jane.jpg' },
+                        country: {
+                          type: 'object',
+                          nullable: true,
+                          properties: {
+                            id: { type: 'number', example: 1 },
+                            name: { type: 'string', example: 'United States' }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              reporters_summary: {
+                type: 'array',
+                description: 'Top 5 unique reporters',
+                items: {
+                  type: 'object',
+                  properties: {
+                    id: { type: 'string' },
+                    full_name: { type: 'string' },
+                    user_name: { type: 'string' },
+                    email: { type: 'string' },
+                    profile_image: { type: 'string' }
+                  }
+                }
+              }
+            }
+          }
+        },
+        total: { type: 'number', example: 5, description: 'Total number of bonds with reports' }
+      }
+    }
+  })
   async getReportedBondsAdmin(
     @Query('page') page = 1,
     @Query('limit') limit = 20,
