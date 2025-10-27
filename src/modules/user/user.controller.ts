@@ -25,6 +25,7 @@ import { UserService } from './user.service';
 import { FindAllUsersDto } from './dto/find-all-users.dto';
 import { AdminGuard } from '../admin/guards/admin/admin.guard';
 import { UserResponseDto } from './dto/user-response.dto';
+import { UserReportsListResponseDto } from './dto/user-report-response.dto';
 
 @ApiTags('Admin - Users')
 @ApiBearerAuth('JWT-auth')
@@ -143,6 +144,77 @@ export class UserController {
       code: 1,
       message: 'Total users count retrieved successfully',
       data: { total },
+    };
+  }
+
+  @Get('reports')
+  @ApiOperation({
+    summary: 'Admin: get all user reports with details',
+    description: `
+      Get a paginated list of all user reports with full details including:
+      - Reported user information (id, name, email, profile image)
+      - Reporter information (id, name, email, profile image)
+      - Report details (reason, description, status, metadata)
+      - Review information (reviewed_by, review_notes, reviewed_at)
+
+      **Filters:**
+      - status: Filter by report status (pending, reviewed, resolved, dismissed)
+      - reason: Filter by report reason (harassment, spam, inappropriate_content, fake_account, etc.)
+
+      **Use Cases:**
+      - View all pending reports for review
+      - Track resolved/dismissed reports
+      - Filter reports by specific violation types
+      - Monitor user reporting trends
+    `
+  })
+  @ApiQuery({
+    name: 'page',
+    required: false,
+    type: Number,
+    example: 1,
+    description: 'Page number (default: 1)'
+  })
+  @ApiQuery({
+    name: 'limit',
+    required: false,
+    type: Number,
+    example: 20,
+    description: 'Items per page (default: 20)'
+  })
+  @ApiQuery({
+    name: 'status',
+    required: false,
+    enum: ['pending', 'reviewed', 'resolved', 'dismissed'],
+    description: 'Filter by report status'
+  })
+  @ApiQuery({
+    name: 'reason',
+    required: false,
+    type: String,
+    description: 'Filter by report reason (harassment, spam, etc.)'
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'User reports retrieved successfully',
+    type: UserReportsListResponseDto,
+  })
+  async getUserReports(
+    @Query('page') page?: number,
+    @Query('limit') limit?: number,
+    @Query('status') status?: string,
+    @Query('reason') reason?: string,
+  ) {
+    const data = await this.userService.getUserReports(
+      page || 1,
+      limit || 20,
+      status,
+      reason,
+    );
+    return {
+      code: 1,
+      message: 'User reports retrieved successfully',
+      data,
     };
   }
 

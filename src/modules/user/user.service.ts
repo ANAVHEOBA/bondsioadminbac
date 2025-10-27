@@ -9,6 +9,9 @@ import { plainToClass } from 'class-transformer';
 import { User } from './entities/user.entity';
 import { NotificationPreferences } from './entities/notification-preferences.entity';
 import { Country } from './entities/country.entity';
+import { UserReport } from './entities/user-report.entity';
+import { UserReportResponseDto } from './dto/user-report-response.dto';
+import { plainToInstance } from 'class-transformer';
 
 /* --------------  HELPERS -------------- */
 export function toUserResponseDto(user: User, enrichedData?: any) {
@@ -48,6 +51,9 @@ export class UserService {
 
     @InjectRepository(Country)
     private readonly countryRepository: Repository<Country>,
+
+    @InjectRepository(UserReport)
+    private readonly userReportRepository: Repository<UserReport>,
   ) {}
 
   /* ----------  ADMIN END-POINTS  ---------- */
@@ -188,6 +194,77 @@ export class UserService {
 
   async getTotalUsers(): Promise<number> {
     return this.repository.count();
+  }
+
+  /* ----------  USER REPORTS  ---------- */
+
+  async getUserReports(
+    page = 1,
+    limit = 20,
+    status?: string,
+    reason?: string,
+  ): Promise<{
+    reports: UserReportResponseDto[];
+    total: number;
+    page: number;
+    limit: number;
+    total_pages: number;
+  }> {
+    const skip = (page - 1) * limit;
+
+    // Build where conditions
+    const where: any = {};
+    if (status) where.status = status;
+    if (reason) where.reason = reason;
+
+    // Get reports with user details
+    const [reports, total] = await this.userReportRepository.findAndCount({
+      where,
+      relations: ['reported_user', 'reporter'],
+      order: { created_at: 'DESC' },
+      skip,
+      take: limit,
+    });
+
+    // Transform to DTO with cleaned user data
+    const transformedReports = reports.map((report) => {
+      const dto: any = plainToInstance(UserReportResponseDto, report, {
+        excludeExtraneousValues: true,
+      });
+
+      // Clean up user data - remove sensitive fields
+      if (report.reported_user) {
+        dto.reported_user = {
+          id: report.reported_user.id,
+          full_name: report.reported_user.full_name,
+          user_name: report.reported_user.user_name,
+          email: report.reported_user.email,
+          profile_image: report.reported_user.profile_image,
+        };
+      }
+
+      if (report.reporter) {
+        dto.reporter = {
+          id: report.reporter.id,
+          full_name: report.reporter.full_name,
+          user_name: report.reporter.user_name,
+          email: report.reporter.email,
+          profile_image: report.reporter.profile_image,
+        };
+      }
+
+      return dto;
+    });
+
+    const total_pages = Math.ceil(total / limit);
+
+    return {
+      reports: transformedReports,
+      total,
+      page,
+      limit,
+      total_pages,
+    };
   }
 
   /* -------------------------------------------------
